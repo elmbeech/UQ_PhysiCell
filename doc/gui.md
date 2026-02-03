@@ -18,7 +18,8 @@ This example demonstrates how to use the UQ PhysiCell GUI to perform a complete 
 2. Set the number of cells to initialize the model to $0$
 3. Create and save the custom initial condition with a disc where $R1 = 0$ and $R2 = 200$
 4. Change the combo box from 'Flow cytometry model (separated)' to 'live' model
-5. Save the .xml file
+5. Add a mechanofeedback on cell cycle entry. `pressure decreases cycle entry from 0 towards 0 with a Hill response, with half-max 0.5 and Hill power 4`.
+6. Save the .xml file
 
 <div align="center">
   <img src="_static/figures/Model_IC01.png" width="45%"/>
@@ -34,6 +35,12 @@ This example demonstrates how to use the UQ PhysiCell GUI to perform a complete 
   <em>Left: Create a disc with $R1 = 0$ and $R2 = 200$, then save (step 3). Right: Change the cell cycle model to 'live' (step 4).</em>
 </div>
 
+<div align="center">
+  <img src="_static/figures/Model_Rule.png" width="45%"/>
+  <br>
+  <em>Create a rule `pressure decreases cycle entry from 0 towards 0 with a Hill response, with half-max 0.5 and Hill power 4` (step 5).</em>
+</div>
+
 
 ### Step 2: Create the UQ PhysiCell Configuration File (.ini)
 
@@ -42,22 +49,22 @@ Now we'll use the GUI to create a configuration file that defines which paramete
 **Steps:**
 1. Launch UQ PhysiCell: run `uq_physicell` in the terminal
 2. Load the .xml file from your model
-3. Select parameters to be fixed in the model exploration: `max_time` = 1440, `omp_threads` = 1, and `enable SVG` = false
+3. Select parameters to be fixed in the model exploration: `omp_threads` = 1, `enable SVG` = false, and `interval` = 240
 4. Select parameters to add to the analysis: `cell_cycle_entry` and `apoptosis_rate`
-5. Provide a structure name (`Model A`), executable path (`project`), and number of replicates (`3`)
+5. Provide a structure name (`Model A`), executable path (`project`), and number of replicates (`5`)
 6. Save the .ini file (`uq_config.ini`)
 
 <div align="center">
   <img src="_static/figures/UQ_IniFile_01.png" width="45%"/>
   <img src="_static/figures/UQ_IniFile_02.png" width="45%"/>
   <br>
-  <em>Left: Load the .xml file (step 2). Right: Set `max_time` = 1440 (step 3).</em>
+  <em>Left: Load the .xml file (step 2). Right: Set `omp_threads` = 1 (step 3).</em>
 </div>
 <div align="center">
   <img src="_static/figures/UQ_IniFile_03.png" width="45%"/>
   <img src="_static/figures/UQ_IniFile_04.png" width="45%"/>
   <br>
-  <em>Left: Set `omp_threads` = 1 (step 3). Right: Set `enable SVG` = false (step 3).</em>
+  <em>Left: Set `enable SVG` = false (step 3). Right: Set `interval` = 240 (step 3).</em>
 </div>
 <div align="center">
   <img src="_static/figures/UQ_IniFile_05.png" width="45%"/>
@@ -79,7 +86,7 @@ Next, we'll sample the parameter space and run simulations to build a database o
 
 **Steps:**
 1. Define the parameter sampling strategy as `Global` and set the sampler to `Sobol`
-2. Change the range of the `apoptosis_rate` parameter to `50%` and press Enter
+2. Check the range of the `apoptosis_rate` parameter.
 3. Sample the parameters with `8` samples and click Plot to visualize the parameter space
 4. Set the database filename to `Simulations.db` and click the Run Simulations button
 5. Set the number of workers to run simulations in parallel using the inter-process strategy, then confirm in the warning message that you want to store the list of MCDS objects
@@ -87,7 +94,7 @@ Next, we'll sample the parameter space and run simulations to build a database o
   <img src="_static/figures/UQ_GenerateDataBase_01.png" width="45%"/>
   <img src="_static/figures/UQ_GenerateDataBase_02.png" width="45%"/>
   <br>
-  <em>Left: Define the parameter sampling strategy as `Global` (step 1). Right: Adjust the range of the `apoptosis_rate` parameter to `50%` (step 2).</em>
+  <em>Left: Define the parameter sampling strategy as `Global` (step 1). Right: Check the range of the `apoptosis_rate` parameter (step 2).</em>
 </div>
 <div align="center">
   <img src="_static/figures/UQ_GenerateDataBase_03.png" width="45%"/>
