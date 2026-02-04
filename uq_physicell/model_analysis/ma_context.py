@@ -223,7 +223,7 @@ def run_simulations(context: ModelAnalysisContext):
         if info_output:
             context.logger.info(f"PhysiCell Model Information:\n{info_output}")
         
-        # Check if the sensitivity analysis already exists
+        # Check if the db file already exists
         try:
             exist_db, All_Parameters, All_Samples, All_Replicates = check_simulations_db(PhysiCellModel, context.dic_metadata['Sampler'], context.params_dict, context.dic_samples, context.qois_dict, context.db_path)
         except Exception as e: 
