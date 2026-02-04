@@ -629,6 +629,30 @@ def load_structure(db_file: str, load_result: bool = True) -> tuple:
     
     return df_metadata, df_parameter_space, df_qois, dic_samples, df_results
 
+def check_db_consistency(db_file):
+    """Check database consistency for Samples and Output.
+    
+    This function verifies that all samples defined in the Samples table
+    have corresponding entries in the Output table. It return the missing entries.
+    
+    Args:
+        db_file (str): Path to the SQLite database file.
+    """
+    # Check if ParameterSpace matches the expected values
+    dic_samples_db = load_samples(db_file)
+    df_results = load_output(db_file, load_data=False)
+    samples_missing = []
+    for sample_id, params in dic_samples_db.items():
+        if sample_id not in set(df_results['SampleID'].values):
+            samples_missing.append(sample_id)
+    
+    for sample_id in samples_missing:
+            print(f"{len(samples_missing)} from Samples table is missing in Output table.")
+            return False
+    print("All samples in Samples table have corresponding entries in Output table.")
+    return True
+
+
 def check_simulations_db(PhysiCellModel: PhysiCell_Model, sampler: str, param_dict: dict, 
                         dic_samples: dict, qois_dic: dict, db_file: str) -> tuple:
     """Check database existence and identify missing simulations.
