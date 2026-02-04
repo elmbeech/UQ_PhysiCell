@@ -3,6 +3,7 @@ import sqlite3
 import pandas as pd
 import numpy as np
 import pickle
+import time
 
 from uq_physicell import PhysiCell_Model
 
@@ -291,9 +292,11 @@ def insert_output(db_file: str, sample_id: int, replicate_id: int, result_data: 
         >>> serialized_data = pickle.dumps(data)
         >>> insert_output('study.db', 0, 1, serialized_data)
     """
-    conn = sqlite3.connect(db_file)
-    cursor = conn.cursor()
     try:
+        conn = sqlite3.connect(db_file)
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")  # Enable Write-Ahead Logging for concurrent writes
+        cursor.execute("PRAGMA synchronous=NORMAL")  # Balance durability with performance
         cursor.execute('INSERT INTO Output (SampleID, ReplicateID, Data) VALUES (?, ?, ?)',
                        (sample_id, int(replicate_id), sqlite3.Binary(result_data)))
         conn.commit()
