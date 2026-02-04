@@ -361,7 +361,7 @@ def run_simulations(context: ModelAnalysisContext):
     elif use_mpi:
         # Split simulations into ranks
         SplitIndexes = np.array_split(np.arange(len(All_Samples)), size, axis=0)
-        context.logger.info(f"Rank {rank} assigned {len(SplitIndexes[rank])} simulations.")
+        context.logger.info(f"Rank {rank} assigned {len(SplitIndexes[rank])} simulations: indices {SplitIndexes[rank].tolist() if len(SplitIndexes[rank]) > 0 else []}")
 
         # Run simulations (MPI)
         for ind_sim in SplitIndexes[rank]:
@@ -377,10 +377,7 @@ def run_simulations(context: ModelAnalysisContext):
             else:
                 _, _, result_data = run_replicate(PhysiCellModel, All_Samples[ind_sim], All_Replicates[ind_sim], ParametersXML,ParametersRules, context.qois_dict)
 
-            # Token-passing mechanism to ensure one rank writes at a time
-            if rank > 0:
-                # Wait for the token from the previous rank
-                comm.recv(source=rank - 1, tag=0)
+            # Write to database with WAL mode handling concurrent writes
             context.logger.info(f"Rank {rank} writing to the database for Sample: {All_Samples[ind_sim]}, Replicate: {All_Replicates[ind_sim]}")
             try:
                 insert_output(context.db_path, All_Samples[ind_sim], All_Replicates[ind_sim], result_data)
@@ -389,9 +386,6 @@ def run_simulations(context: ModelAnalysisContext):
                 context.logger.error(f"Rank {rank}: Error writing to the database: {e}")
                 raise  # Re-raise to stop execution and prevent data corruption
 
-            # Pass the token to the next rank
-            if rank < size - 1:
-                comm.send(None, dest=rank + 1, tag=0)
         comm.Barrier()
         MPI.Finalize()
 
