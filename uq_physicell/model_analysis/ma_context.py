@@ -370,12 +370,18 @@ def run_simulations(context: ModelAnalysisContext):
                 break
             ParametersXML = {key: All_Parameters[ind_sim][key] for key in params_xml} if params_xml else np.array([])
             ParametersRules = {key: All_Parameters[ind_sim][key] for key in params_rules} if params_rules else np.array([])
-            if context.summary_function:
-                result_data_nonserialized = PhysiCellModel.RunModel(
-                    All_Samples[ind_sim], All_Replicates[ind_sim], ParametersXML, ParametersRules, RemoveConfigFile=True, SummaryFunction=context.summary_function)
-                result_data = pickle.dumps(result_data_nonserialized)
-            else:
-                _, _, result_data = run_replicate(PhysiCellModel, All_Samples[ind_sim], All_Replicates[ind_sim], ParametersXML,ParametersRules, context.qois_dict)
+            try:
+                if context.summary_function:
+                    result_data_nonserialized = PhysiCellModel.RunModel(
+                        All_Samples[ind_sim], All_Replicates[ind_sim], ParametersXML, ParametersRules, RemoveConfigFile=True, SummaryFunction=context.summary_function)
+                    result_data = pickle.dumps(result_data_nonserialized)
+                else:
+                    _, _, result_data = run_replicate(PhysiCellModel, All_Samples[ind_sim], All_Replicates[ind_sim], ParametersXML,ParametersRules, context.qois_dict)
+            except Exception as e:
+                context.logger.error(
+                    f"Rank {rank}: Error running simulation for Sample: {All_Samples[ind_sim]}, Replicate: {All_Replicates[ind_sim]}: {e}"
+                )
+                continue
 
             # Write to database with WAL mode handling concurrent writes
             context.logger.info(f"Rank {rank} writing to the database for Sample: {All_Samples[ind_sim]}, Replicate: {All_Replicates[ind_sim]}")
@@ -383,8 +389,10 @@ def run_simulations(context: ModelAnalysisContext):
                 insert_output(context.db_path, All_Samples[ind_sim], All_Replicates[ind_sim], result_data)
                 context.logger.info(f"Rank {rank} finished writing to the database for Sample: {All_Samples[ind_sim]}, Replicate: {All_Replicates[ind_sim]}")
             except Exception as e:
-                context.logger.error(f"Rank {rank}: Error writing to the database: {e}")
-                raise  # Re-raise to stop execution and prevent data corruption
+                context.logger.error(
+                    f"Rank {rank}: Error writing to the database for Sample: {All_Samples[ind_sim]}, Replicate: {All_Replicates[ind_sim]}: {e}"
+                )
+                continue
 
         comm.Barrier()
         MPI.Finalize()
