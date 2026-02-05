@@ -69,13 +69,13 @@ class PhysiCell_Model:
         # Path of XML file of reference
 
         #### Optional variables
-        self.timeout = configFile[keyModel].get('timeout', fallback=None) # timeout for waiting to run one simulation
+        self.timeout_per_simulation_sec = configFile[keyModel].get('timeout_per_simulation', fallback=None) # timeout for waiting to run one simulation
         self.projName = configFile[keyModel].get('projName', fallback=keyModel) # project name
         self.XML_name = configFile[keyModel].get('configFile_name', fallback="config_S%06d_R%03d.xml") # config files structure
         self.input_folder = configFile[keyModel].get("configFile_folder", fallback="UQ_PC_InputFolder/") # folder to store input files (.xmls, .csv, and .txt)
         self.output_folder = configFile[keyModel].get('outputs_folder', fallback="UQ_PC_OutputFolder/") # folder to store the output folders
         self.outputs_folder_name = configFile[keyModel].get('outputs_folder_name', fallback="output_S%06d_R%03d/") # structure of output folders
-        self.timeout_writeXML = configFile[keyModel].get('timeout_writeXML', fallback=60) # timeout for waiting to write xml files
+        self.timeout_writeXML_sec = configFile[keyModel].get('timeout_writeXML', fallback=60) # timeout for waiting to write xml files
         self.generate_summary_File = configFile[keyModel].get('generate_summary_file', fallback=False) # generate csv file
         self.output_summary_Path = self.output_folder+'SummaryFile_%06d_%02d.csv' # path of the summary file
         # Rules files and folder
@@ -398,7 +398,7 @@ def _setup_model_input(model: PhysiCell_Model, SampleID: int, ReplicateID: int, 
         rel_XMLFile = os.path.relpath(XMLFile, os.getcwd())
         print(f"\t\t\t>>> Generating XML file {rel_XMLFile} ...")
     try:
-        _generate_xml_file(pathlib.Path(model.XML_RefPath), pathlib.Path(XMLFile), dic_xml_parameters, model.timeout_writeXML)
+        _generate_xml_file(pathlib.Path(model.XML_RefPath), pathlib.Path(XMLFile), dic_xml_parameters, model.timeout_writeXML_sec)
     except ValueError as e:
         raise ValueError(f"Error in generating XML file! {e}")
 
@@ -420,11 +420,11 @@ def _run_model(model: PhysiCell_Model, SampleID: int, ReplicateID: int, Paramete
         # Use run_simulation_subprocess with tracking
         process = model.run_simulation_subprocess(XMLFile, SampleID, ReplicateID)
         try:
-            stdout, stderr = process.communicate(timeout=float(model.timeout) if model.timeout else None)
+            stdout, stderr = process.communicate(timeout=float(model.timeout_per_simulation_sec) if model.timeout_per_simulation_sec else None)
         except subprocess.TimeoutExpired:
             process.kill()
             stdout, stderr = process.communicate()
-            raise ValueError(f"Simulation timeout expired ({model.timeout} seconds) for Sample: {SampleID}, Replicate: {ReplicateID}. Process killed.")
+            raise ValueError(f"Simulation timeout expired ({model.timeout_per_simulation_sec} seconds) for Sample: {SampleID}, Replicate: {ReplicateID}. Process killed.")
         
         if process.returncode != 0:
             raise ValueError(f"""Model output error! 
