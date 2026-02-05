@@ -650,7 +650,7 @@ def check_db_consistency(db_file):
             samples_missing.append(sample_id)
     
     for sample_id in samples_missing:
-            print(f"{len(samples_missing)} from Samples table is missing in Output table.")
+            print(f"{len(samples_missing)} from Samples table is missing in Output table.\n Missing SampleIDs: {samples_missing}")
             return False
     print("All samples in Samples table have corresponding entries in Output table.")
     return True
