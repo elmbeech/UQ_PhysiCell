@@ -295,6 +295,7 @@ class TestRunBayesianOptimization(unittest.TestCase):
         self.mock_context.db_path = '/fake/path.db'
         self.mock_context.logger = self.logger
         self.mock_context.qoi_details = {'QOI_Name': ['obj1', 'obj2']}
+        self.mock_context.db_path_initial_samples = None
         
         # Patch PhysiCell_Model in the bo_context module so tests don't instantiate the real model
         # This keeps changes confined to tests and avoids touching core code.
@@ -328,7 +329,7 @@ class TestRunBayesianOptimization(unittest.TestCase):
         # Mock the generate_and_evaluate_samples method
         self.mock_context.num_initial_samples = 10
         self.mock_context.generate_and_evaluate_samples.return_value = (
-            torch.randn(10, 2), torch.randn(10, 2), torch.randn(10, 2), torch.randn(10, 2)
+            torch.randn(10, 2), torch.randn(10, 2), torch.randn(10, 2)
         )
         
         run_bayesian_optimization(self.mock_context)
@@ -343,7 +344,7 @@ class TestRunBayesianOptimization(unittest.TestCase):
         mock_multi_obj.assert_called_once()
         
         # Verify sample generation was called
-        self.mock_context.generate_and_evaluate_samples.assert_called_once_with(10, start_sample_id=0, iteration_id=0)
+        self.mock_context.generate_and_evaluate_samples.assert_called_once_with(start_sample_id=0, iteration_id=0)
 
     @patch('uq_physicell.bo.bo_context.os.path.exists')
     @patch('uq_physicell.bo.bo_context.single_objective_bayesian_optimization')
@@ -358,7 +359,7 @@ class TestRunBayesianOptimization(unittest.TestCase):
         # Mock required methods
         self.mock_context.num_initial_samples = 10
         self.mock_context.generate_and_evaluate_samples.return_value = (
-            torch.randn(10, 2), torch.randn(10, 1), torch.randn(10, 1), torch.randn(10, 1)
+            torch.randn(10, 2), torch.randn(10, 1), torch.randn(10, 1)
         )
         
         with patch('uq_physicell.bo.bo_context.create_structure'), \
@@ -380,8 +381,8 @@ class TestRunBayesianOptimization(unittest.TestCase):
         
         # Mock the load_existing_data method
         self.mock_context.load_existing_data.return_value = (
-            torch.randn(15, 2), torch.randn(15, 2), torch.randn(15, 2), 
-            torch.randn(15, 2), 2, 0.5  # latest_iteration, latest_hypervolume
+            torch.randn(15, 2), torch.randn(15, 2), torch.randn(15, 2),
+            2, 0.5  # latest_iteration, latest_hypervolume
         )
         
         run_bayesian_optimization(self.mock_context)
@@ -392,7 +393,7 @@ class TestRunBayesianOptimization(unittest.TestCase):
         # Verify multi-objective optimization was called with start_iteration=3
         mock_multi_obj.assert_called_once()
         args = mock_multi_obj.call_args[0]
-        start_iteration = args[5]  # 6th argument (0-indexed)
+        start_iteration = args[4]  # 5th argument (0-indexed)
         self.assertEqual(start_iteration, 3)
 
     @patch('uq_physicell.bo.bo_context.os.path.exists')
@@ -403,8 +404,8 @@ class TestRunBayesianOptimization(unittest.TestCase):
         
         # Mock the methods
         self.mock_context.load_existing_data.return_value = (
-            torch.randn(15, 2), torch.randn(15, 2), torch.randn(15, 2), 
-            torch.randn(15, 2), 2, 0.5
+            torch.randn(15, 2), torch.randn(15, 2), torch.randn(15, 2),
+            2, 0.5
         )
         
         with patch('uq_physicell.bo.bo_context.multi_objective_bayesian_optimization'):
