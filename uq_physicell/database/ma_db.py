@@ -304,6 +304,29 @@ def insert_output(db_file: str, sample_id: int, replicate_id: int, result_data: 
     except sqlite3.Error as e:
         raise RuntimeError(f"Error inserting output into the database: {e}")
 
+def disable_wal_mode(db_file: str) -> None:
+    """Disable WAL mode and truncate WAL/SHM files if possible.
+
+    This function runs a WAL checkpoint and switches the journal mode back to
+    DELETE. It only succeeds if no other connections are open.
+
+    Args:
+        db_file (str): Path to the SQLite database file.
+
+    Raises:
+        RuntimeError: If the checkpoint or journal mode change fails.
+    """
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        cursor.execute("PRAGMA journal_mode=DELETE")
+        conn.commit()
+    except sqlite3.Error as e:
+        raise RuntimeError(f"Error disabling WAL mode: {e}")
+    finally:
+        conn.close()
+
 def load_metadata(db_file: str) -> pd.DataFrame:
     """Load metadata from the database.
     
