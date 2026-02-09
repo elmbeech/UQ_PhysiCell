@@ -4,8 +4,7 @@ from typing import Union
 
 # My local modules
 from ..database.ma_db import load_output, load_samples, check_db_consistency
-from ..utils.model_wrapper import create_named_function_from_string
-from ..utils.sumstats import safe_call_qoi_function
+from ..utils.sumstats import recreate_qoi_functions, safe_call_qoi_function
 
 def reshape_sa_expanded_data(expanded_data: pd.DataFrame, qoi_columns: list) -> pd.DataFrame:
     """Reshape expanded sensitivity analysis data for pivot table analysis.
@@ -178,10 +177,7 @@ def calculate_qoi_from_sa_db(db_file: str, qoi_functions: dict, chunk_size: int 
     all_sample_ids = sorted(dic_samples.keys())
     
     # Recreate QoI functions from their string representations
-    recreated_qoi_funcs = {
-        qoi_name: create_named_function_from_string(qoi_value, qoi_name)
-        for qoi_name, qoi_value in qoi_functions.items()
-    }
+    recreated_qoi_funcs = recreate_qoi_functions(qoi_functions)
     if mode == 'sa':
         df_qois = mcds_list_to_qoi_df_for_sa(
             recreated_qoi_funcs=recreated_qoi_funcs,

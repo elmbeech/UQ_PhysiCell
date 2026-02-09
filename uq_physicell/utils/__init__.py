@@ -10,8 +10,6 @@ from .distances import (
     Chebyshev
 )
 from .model_wrapper import (
-    create_named_function_from_string,
-    summary_function,
     run_replicate,
     run_replicate_serializable
 )
@@ -19,18 +17,18 @@ from .model_wrapper import (
 from .sumstats import (
     summ_func_FinalPopLiveDead,
     summ_func_TimeSeriesPopLiveDead,
-    generic_QoI
+    recreate_qoi_functions,
+    summary_function
 )
 
 __all__ = [
     'SumSquaredDifferences',
     'Manhattan',
     'Chebyshev',
-    'create_named_function_from_string',
-    'summary_function',
+    'recreate_qoi_functions',
     'run_replicate',
     'run_replicate_serializable',
     'summ_func_FinalPopLiveDead',
     'summ_func_TimeSeriesPopLiveDead',
-    'generic_QoI',
+    'summary_function',
 ]
