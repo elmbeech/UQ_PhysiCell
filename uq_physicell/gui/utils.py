@@ -29,8 +29,13 @@ def get_local_SA_parameters(db_file):
 def plot_qoi_over_time(df_plot, selected_qoi, ax):
     import pandas as pd
     import seaborn as sns
+    import re
     # Identify the relevant columns
-    qoi_columns = sorted([col for col in df_plot.columns if col.startswith(selected_qoi)])
+    qoi_pattern = re.compile(rf"^{re.escape(selected_qoi)}_(\d+)$")
+    qoi_columns = sorted([
+        col for col in df_plot.columns
+        if col == selected_qoi or qoi_pattern.match(col)
+    ])
     # Extract time IDs from the QoI columns - (Some QoIs may not have multiple time points, e.g., cumulative values over time)
     time_ids = [col.split(f"{selected_qoi}_")[-1] for col in qoi_columns]
     time_columns = sorted([f"time_{time_id}" for time_id in time_ids])
