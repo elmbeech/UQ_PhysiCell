@@ -25,7 +25,7 @@ except ImportError:
 from uq_physicell import PhysiCell_Model
 from .samplers import run_local_sampler, run_global_sampler, run_local_sampler
 from ..utils.model_wrapper import run_replicate, run_replicate_serializable
-from ..database.ma_db import create_structure, insert_metadata, insert_param_space, insert_qois, insert_samples, insert_output, check_simulations_db
+from ..database.ma_db import create_structure, insert_metadata, insert_param_space, insert_qois, insert_samples, insert_output, check_simulations_db, disable_wal_mode
 
 
 class ModelAnalysisContext:
@@ -425,6 +425,11 @@ def run_simulations(context: ModelAnalysisContext):
             except Exception as e:
                 context.logger.error(f"Error inserting output into the database: {e}")
                 raise
+
+    if rank == 0:
+        print(f"Simulations completed and results stored in the database: {context.db_path}.")
+        # Disable WAL mode of the database to allow reading results without locks
+        disable_wal_mode(context.db_path)
             
 if __name__ == "__main__":
     pass
