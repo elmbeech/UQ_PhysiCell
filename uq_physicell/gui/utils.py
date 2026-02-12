@@ -26,14 +26,13 @@ def get_local_SA_parameters(db_file):
                                                     "perturbation": df_parameter_space['perturbation'].iloc[id]}
     return local_SA_parameters
 
-def plot_qoi_over_time(df_plot, selected_qoi, ax):
+def convert_df_to_df_over_time(df_summary, selected_qoi):
     import pandas as pd
-    import seaborn as sns
     import re
     # Identify the relevant columns
     qoi_pattern = re.compile(rf"^{re.escape(selected_qoi)}_(\d+)$")
     qoi_columns = sorted([
-        col for col in df_plot.columns
+        col for col in df_summary.columns
         if col == selected_qoi or qoi_pattern.match(col)
     ])
     # Extract time IDs from the QoI columns - (Some QoIs may not have multiple time points, e.g., cumulative values over time)
@@ -41,12 +40,18 @@ def plot_qoi_over_time(df_plot, selected_qoi, ax):
     time_columns = sorted([f"time_{time_id}" for time_id in time_ids])
     # Prepare the data for seaborn
     plot_data = pd.DataFrame({
-        "Time": df_plot[time_columns].values.flatten(),
-        selected_qoi: df_plot[qoi_columns].values.flatten(),
-        "SampleID": df_plot.index.repeat(len(qoi_columns))
+        "Time": df_summary[time_columns].values.flatten(),
+        selected_qoi: df_summary[qoi_columns].values.flatten(),
+        "SampleID": df_summary.index.repeat(len(qoi_columns))
     })
+    return plot_data
+
+def plot_qoi_over_time(df_plot, selected_qoi, ax):
+    import seaborn as sns
+    # Prepare the data for seaborn
+    plot_data = convert_df_to_df_over_time(df_plot, selected_qoi)
     # If just one time point, use swarmplot, else use lineplot
-    if len(time_columns) == 1:
+    if len(plot_data["Time"].unique()) == 1:
         sns.swarmplot(data=plot_data, x="Time", y=selected_qoi, hue="SampleID", ax=ax)
     else:
         sns.lineplot(data=plot_data, x="Time", y=selected_qoi, hue="SampleID", ax=ax)
