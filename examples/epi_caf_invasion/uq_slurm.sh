@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=UQ_epi_caf_invasion
 #SBATCH --mail-type=FAIL,END
-#SBATCH --mem=64G
+#SBATCH --mem=128G
 #SBATCH --output=UQ_epi_caf_invasion_%j.log
 #SBATCH --error=UQ_epi_caf_invasion_%j.err
 #SBATCH --time=0-12:00:00
-#SBATCH --ntasks=50
+#SBATCH --ntasks=10
 #SBATCH --cpus-per-task=4
 
 # -----------------------------
