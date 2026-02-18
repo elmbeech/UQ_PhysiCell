@@ -192,12 +192,13 @@ def plot_qoi_param(df_ObsData:pd.DataFrame, df_output:pd.DataFrame, samples_id:l
     # Plot PhysiCell replicates with only one legend entry using seaborn
     # Add formatted SampleID for better legend display
     all_df_data['SampleID_formatted'] = all_df_data['SampleID'].apply(lambda x: f'SampleID: {x}')
-    if df_data[y_var].nunique() > 1:  # Ensure there are multiple y values to plot
-        sns.lineplot(data=all_df_data, x=x_var, y=y_var, ax=ax,
-            hue='SampleID_formatted', units='replicateID', dashes=(4,2), estimator=None)
-    else:
-        sns.scatterplot(data=all_df_data, x=x_var, y=y_var, ax=ax,
-            hue='SampleID_formatted', style='replicateID', s=50, alpha=0.5)
+    if not all_df_data.empty:
+        if all_df_data[y_var].nunique() > 1:  # Ensure there are multiple y values to plot
+            sns.lineplot(data=all_df_data, x=x_var, y=y_var, ax=ax,
+                hue='SampleID_formatted', units='replicateID', dashes=(4,2), estimator=None)
+        else:
+            sns.scatterplot(data=all_df_data, x=x_var, y=y_var, ax=ax,
+                hue='SampleID_formatted', style='replicateID', s=50, alpha=0.5)
 
     ax.set_xlabel(x_var)
     ax.set_ylabel(y_var)
