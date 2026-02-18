@@ -20,10 +20,11 @@ def get_local_SA_parameters(db_file):
     df_parameter_space = load_parameter_space(db_file)
     local_SA_parameters = {'samples': load_samples(db_file)}
     for id, param in enumerate(df_parameter_space['ParamName']):
-        if type(df_parameter_space['perturbation'].iloc[id]) == list:
-            df_parameter_space['perturbation'].iloc[id] = [float(x) for x in df_parameter_space['perturbation'].iloc[id]]
+        perturbation = df_parameter_space['perturbation'].iloc[id]
+        if isinstance(perturbation, list):
+            perturbation = [float(x) for x in perturbation]
         local_SA_parameters[param] = {"ref_value": df_parameter_space['ref_value'].iloc[id], 
-                                                    "perturbation": df_parameter_space['perturbation'].iloc[id]}
+                                                    "perturbation": perturbation}
     return local_SA_parameters
 
 def convert_df_to_df_over_time(df_summary, selected_qoi):
