@@ -135,15 +135,18 @@ def create_named_function_from_string(func_str: str, qoi_name: str) -> callable:
     else:
         arg_name = 'mcds'
     
-    # Create a namespace with necessary imports
-    namespace = {'pd': pd, 'np': np, 'len': len}
+    # Create a restricted namespace with necessary imports and no built-in functions
+    namespace = {'pd': pd, 'np': np, 'len': len, '__builtins__': {}}
     
-    # Create a wrapper function that accepts any arguments
+    # Evaluate the lambda function once at creation time
+    try:
+        compiled_func = eval(func_str, namespace)
+    except Exception as e:
+        raise ValueError(f"Error evaluating QoI function string '{func_str}': {e}")
+    
+    # Create a wrapper function that calls the pre-compiled lambda
     def wrapper(*args, **kwargs):
-        # Evaluate the lambda function string
-        func = eval(func_str, namespace)
-        # Call it with the provided arguments
-        return func(*args, **kwargs)
+        return compiled_func(*args, **kwargs)
     
     # Store the original parameter name as an attribute for inspection
     wrapper.__param_name__ = arg_name
@@ -220,27 +223,28 @@ def summary_function(outputPath:str, summaryFile:Union[str, None], dic_params:di
             needs_microenv = check_functions_need_microenv(qoi_functions)
             # Load the time series
             mcds_ts = pcdl.TimeSeries(outputPath, microenv=needs_microenv, graph=False, settingxml=None, verbose=False)
+            list_mcds=mcds_ts.get_mcds_list()
             #  All data is stored as a list of mcds
             if qoi_functions is None:
                 # Optional: Remove replicate output folder
                 if (RemoveFolder): rmtree(outputPath)
                 # Entire list of mcds is returned if drop_columns is empty
                 if not drop_columns:
-                    return mcds_ts.get_mcds_list()
+                    return list_mcds
                 else:
                     df_list = []
-                    for mcds in mcds_ts.get_mcds_list():
+                    for mcds in list_mcds:
                         df_cell = mcds.get_cell_df()
                         df_cell.drop(columns=drop_columns, inplace=True, errors='ignore')
                         df_list.append(df_cell)
                     return df_list
             else:
                 df_list = []
-                for mcds in mcds_ts.get_mcds_list():
+                for mcds in list_mcds:
                     try:
                         qoi_data = {}
                         for name, func in qoi_functions.items():
-                            func_result = safe_call_qoi_function(func, mcds=mcds, list_mcds=mcds_ts.get_mcds_list())
+                            func_result = safe_call_qoi_function(func, mcds=mcds, list_mcds=list_mcds)
                             if func_result is not None:
                                 qoi_data[name] = func_result
                         if not qoi_data: continue  # Skip if no QoI data was computed
@@ -295,16 +299,17 @@ def summary_function(outputPath:str, summaryFile:Union[str, None], dic_params:di
     else:
         return df
 
-def compute_persistent_homology(df:pd.DataFrame, Plot=False) -> pd.Series:
+def compute_persistent_homology(df:pd.DataFrame, Plot=False) -> tuple:
     """
     Compute persistent homology vectorization using muspan.
     (source: https://docs.muspan.co.uk/latest/_collections/topology/Topology%203%20-%20persistence%20vectorisation.html)
     
     Parameters:
     - df_cells: DataFrame -> DataFrame containing cell data with 'position_x', 'position_y', and 'cell_type' columns.
+    - Plot: bool -> Whether to plot the persistence diagram (optional).
     
     Returns:
-    - pd.Series -> Vectorized persistent homology features.
+    - tuple -> (pd.Series with vectorized persistent homology features, figure or None)
     """
     import matplotlib.pyplot as plt
     try:
@@ -342,7 +347,7 @@ def compute_persistent_homology(df:pd.DataFrame, Plot=False) -> pd.Series:
     vectorised_ph,name_of_features = muspan.topology.vectorise_persistence(feature_persistence, method='statistics')
     return pd.Series(vectorised_ph, index=name_of_features), figure
 
-def compute_relational_ph( df: pd.DataFrame, landmark_type: str, witness_type: str, max_dim: int = 1, mode: str = "distance", ax = None) -> pd.Series:
+def compute_relational_ph( df: pd.DataFrame, landmark_type: str, witness_type: str, max_dim: int = 1, mode: str = "distance", ax = None) -> tuple:
     """
     Relational Persistent Homology using Dowker/Witness idea.
     A→B (A as vertices, B as witnesses) describes how B are arranged around A geometry.
@@ -358,8 +363,7 @@ def compute_relational_ph( df: pd.DataFrame, landmark_type: str, witness_type: s
 
     Returns
     -------
-    vectorized_PH : pd.Series
-    figure : matplotlib figure or None
+    tuple -> (pd.Series with vectorized persistent homology features, persistence diagram)
     """
     from scipy.spatial.distance import cdist
     from scipy.spatial import Delaunay
