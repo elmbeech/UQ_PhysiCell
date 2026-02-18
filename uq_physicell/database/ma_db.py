@@ -292,17 +292,21 @@ def insert_output(db_file: str, sample_id: int, replicate_id: int, result_data: 
         >>> serialized_data = pickle.dumps(data)
         >>> insert_output('study.db', 0, 1, serialized_data)
     """
+    conn = None
     try:
-        conn = sqlite3.connect(db_file)
+        conn = sqlite3.connect(db_file, timeout=30.0)  # 30 second timeout for busy database
         cursor = conn.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")  # Enable Write-Ahead Logging for concurrent writes
         cursor.execute("PRAGMA synchronous=NORMAL")  # Balance durability with performance
+        cursor.execute("PRAGMA busy_timeout=30000")  # 30 second busy timeout in milliseconds
         cursor.execute('INSERT INTO Output (SampleID, ReplicateID, Data) VALUES (?, ?, ?)',
                        (sample_id, int(replicate_id), sqlite3.Binary(result_data)))
         conn.commit()
-        conn.close()
     except sqlite3.Error as e:
         raise RuntimeError(f"Error inserting output into the database: {e}")
+    finally:
+        if conn:
+            conn.close()
 
 def disable_wal_mode(db_file: str) -> None:
     """Disable WAL mode and truncate WAL/SHM files if possible.
