@@ -42,8 +42,16 @@ def test_initialization():
         'QoI2': 'QoI2_data'
     }
 
+    # Create a temporary INI file for testing
+    ini_content = """[model_struc_name]
+    numReplicates = 1
+    """
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ini', delete=False) as ini_file:
+        ini_file.write(ini_content)
+        ini_file_path = ini_file.name
+
     model_config = {
-        'ini_path': 'ini_file_path.ini',
+        'ini_path': ini_file_path,
         'struc_name': 'model_struc_name',
     }
 
@@ -105,6 +113,11 @@ def test_initialization():
         if db_path and os.path.exists(db_path):
             try:
                 os.unlink(db_path)
+            except Exception:
+                pass
+        if ini_file_path and os.path.exists(ini_file_path):
+            try:
+                os.unlink(ini_file_path)
             except Exception:
                 pass
 
