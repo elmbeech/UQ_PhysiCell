@@ -1,9 +1,8 @@
 import os
 import sys
 import logging
-import concurrent.futures
 from typing import Union, Optional, Dict, List, Callable, Any
-import gc
+import configparser
 
 import numpy as np
 import pandas as pd
@@ -17,6 +16,7 @@ from dask.distributed import Client, get_worker
 
 # UQ PhysiCell imports
 from uq_physicell import PhysiCell_Model
+from uq_physicell.abc.utils import insert_adaptive_weights_db
 from uq_physicell.utils import run_replicate_serializable
 
 
@@ -103,22 +103,26 @@ class CalibrationContext:
         self.min_population_size = abc_options.get("min_population_size", 100)
         self.max_population_size = abc_options.get("max_population_size", 500)
         self.epsilon_strategy = abc_options.get("epsilon_strategy", "quantile")
-        self.epsilon_alpha = abc_options.get("epsilon_alpha", 0.4)
+        self.epsilon_alpha = abc_options.get("epsilon_alpha", 0.5) # Quantile for epsilon threshold (e.g., 0.5 for median distance)
         
         # Transition and distance configuration
         self.transition_strategy = abc_options.get("transition_strategy", "multivariate")  # "local" or "multivariate"
         self.adaptive_distance = abc_options.get("adaptive_distance", False)
-        self.adaptive_distance_file = abc_options.get("adaptive_distance_file", None)
+        self.adaptive_distance_file = abc_options.get("adaptive_distance_file", None if not self.adaptive_distance else "adaptive_distance_log.json")
         self.convergence_check_func = abc_options.get("convergence_check_func", None)
         
         # Sampling configuration
         self.sampler_type = abc_options.get("sampler", "multicore")  # "dask" or "multicore"
         self.cluster_setup_func = abc_options.get("cluster_setup_func", None) # Function to setup Dask cluster
         self.num_workers = abc_options.get("num_workers", os.cpu_count())
-        self.mode = abc_options.get("mode", "cluster")  # "cluster" or "local"
         
         # Model configuration
-        self.num_replicates = self.model_config.get('numReplicates', 10)
+        self.num_replicates = self.model_config.get('numReplicates', None)
+        # Read num_replicates from ini file if not provided in model_config
+        if self.num_replicates is None:
+            configFile = configparser.ConfigParser()
+            configFile.read_file(open(model_config['ini_path']))
+            self.num_replicates = int(configFile[model_config['struc_name']]['numReplicates'])
         self.fixed_params = abc_options.get('fixed_params', {})
         self.summary_function = abc_options.get("summary_function", None)
         self.aggregation_func = abc_options.get("custom_aggregation_func", self._default_aggregation_func)
@@ -146,26 +150,15 @@ class CalibrationContext:
 
     def _setup_parallelization(self):
         """Setup parallelization strategy based on configuration."""
-        if self.mode == "cluster":
-            if self.sampler_type == "dask":
-                self.workers_inner = None  # Dask handles its own parallelization
-                self.workers_outer = self.num_workers
-            elif self.sampler_type == "multicore":
-                # Calculate nested parallelization for multicore
-                self.workers_inner = min(self.num_workers, self.num_replicates)  # workers for replicates
-                self.workers_outer = max(1, self.num_workers // self.workers_inner)  # workers for parameter sets
-            else:
-                raise ValueError(f"Sampler {self.sampler_type} is not supported. Use 'dask' or 'multicore'.")
-        else:  # local mode
-            self.num_replicates = min(self.num_replicates, 2)  # Reduce replicates for local testing
-            if self.sampler_type == "dask":
-                self.workers_inner = None
-                self.workers_outer = min(self.num_workers, 4)  # Limit for local testing
-            elif self.sampler_type == "multicore":
-                self.workers_inner = min(self.num_workers, self.num_replicates)
-                self.workers_outer = max(1, self.num_workers // self.workers_inner)
-            else:
-                raise ValueError(f"Sampler {self.sampler_type} is not supported. Use 'dask' or 'multicore'.")
+        if self.sampler_type == "dask":
+            self.workers_inner = None  # Dask handles its own parallelization
+            self.workers_outer = self.num_workers
+        elif self.sampler_type == "multicore":
+            # Calculate nested parallelization for multicore
+            self.workers_inner = min(self.num_workers, self.num_replicates)  # workers for replicates
+            self.workers_outer = max(1, self.num_workers // self.workers_inner)  # workers for parameter sets
+        else:
+            raise ValueError(f"Sampler {self.sampler_type} is not supported. Use 'dask' or 'multicore'.")
 
     def _validate_configuration(self):
         """Validate the configuration parameters."""
@@ -191,18 +184,14 @@ class CalibrationContext:
     def setup_sampler(self, cluster_setup_func=None):
         """Setup the pyABC sampler based on configuration."""
         if self.sampler_type == "dask":
-            if self.mode == "cluster":
-                if cluster_setup_func is None:
-                    raise ValueError("cluster_setup_func must be provided for cluster mode with Dask")
-                cluster = cluster_setup_func()
-                my_sampler = sampler.DaskDistributedSampler(Client(cluster))
-                self.logger.info(f"Using Dask sampler with {self.num_workers} workers")
+            if cluster_setup_func is None:
+                raise ValueError("cluster_setup_func must be provided for cluster mode with Dask")
+            cluster = cluster_setup_func()
+            my_sampler = sampler.DaskDistributedSampler(Client(cluster))
+            self.logger.info(f"Using Dask sampler with {self.num_workers} workers")
         elif self.sampler_type == "multicore":
             my_sampler = sampler.MulticoreParticleParallelSampler(n_procs=self.workers_outer)
-            if self.mode == "cluster":
-                self.logger.info(f"Using nested multicore parallelization: {self.workers_outer} outer processes × {self.workers_inner} inner threads = {self.workers_outer * self.workers_inner} total")
-            else:
-                self.logger.info(f"Using local nested multicore parallelization: {self.workers_outer} outer processes × {self.workers_inner} inner threads = {self.workers_outer * self.workers_inner} total")
+            self.logger.info(f"Using nested multicore parallelization: {self.workers_outer} outer processes × {self.workers_inner} inner threads = {self.workers_outer * self.workers_inner} total")
         else:
             raise ValueError(f"Sampler {self.sampler_type} is not supported.")
         
@@ -218,8 +207,8 @@ class CalibrationContext:
                 max_population_size=self.max_population_size
             )
         else:
-            # Fixed population size (useful for local testing)
-            return self.min_population_size if self.mode == "local" else self.max_population_size
+            # Fixed population size - use max_population_size as the fixed size
+            return self.max_population_size
 
     def setup_distance_function(self, distances_dict):
         qois = list(self.qoi_functions.keys())
@@ -427,6 +416,9 @@ class CalibrationContext:
         else:
             self.logger.info(f"Starting calibration: max populations: {self.max_populations}, max simulations: {self.max_simulations}")
             abc_smc.run(max_nr_populations=self.max_populations, max_total_nr_simulations=self.max_simulations)
+        # Add extra info of adaptive distance to database
+        if self.adaptive_distance:
+            insert_adaptive_weights_db(self.db_path, dict_distances=self.distance_functions, dict_adaptive_weights=load_dict_from_json(self.adaptive_distance_file))
 
     def check_convergence(self, abc_smc):
         """Check convergence criteria."""
@@ -544,6 +536,9 @@ def run_abc_calibration( calib_context: CalibrationContext) -> History:
                     max_nr_populations=calib_context.max_populations,
                     max_total_nr_simulations=calib_context.max_simulations
                 )
+                # Add extra info of adaptive distance to database
+                if calib_context.adaptive_distance:
+                    insert_adaptive_weights_db(calib_context.db_path, dict_distances=calib_context.distance_functions, dict_adaptive_weights=load_dict_from_json(calib_context.adaptive_distance_file))
         # Remove temporary file and folders
         physicell_model = PhysiCell_Model(calib_context.model_config['ini_path'], calib_context.model_config['struc_name'])
         physicell_model.remove_io_folders()

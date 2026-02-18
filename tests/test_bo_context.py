@@ -139,49 +139,6 @@ class TestCalibrationContext(unittest.TestCase):
                 logger=self.logger
             )
 
-    def test_invalid_acquisition_strategy(self):
-        """Test error handling for invalid acquisition strategy."""
-        bo_options_bad = self.bo_options.copy()
-        bo_options_bad['acq_func_strategy'] = 'invalid_strategy'
-        
-        with self.assertRaises(Exception):
-            CalibrationContext(
-                db_path='/fake/db.db',
-                obsData=self.temp_file.name,
-                obsData_columns=self.obsData_columns,
-                model_config=self.model_config,
-                qoi_functions=self.qoi_functions,
-                distance_functions=self.distance_functions,
-                search_space=self.search_space,
-                bo_options=bo_options_bad,
-                logger=self.logger
-            )
-
-    def test_valid_acquisition_strategies(self):
-        """Test that all valid acquisition strategies are accepted."""
-        valid_strategies = ["diversity_bonus", "uncertainty_weighting", "soft_constraints", 
-                          "adaptive_scaling", "combined", "none"]
-        
-        for strategy in valid_strategies:
-            bo_options_test = self.bo_options.copy()
-            bo_options_test['acq_func_strategy'] = strategy
-            
-            # This should not raise an exception
-            context = CalibrationContext(
-                db_path='/fake/db.db',
-                obsData=self.temp_file.name,
-                obsData_columns=self.obsData_columns,
-                model_config=self.model_config,
-                qoi_functions=self.qoi_functions,
-                distance_functions=self.distance_functions,
-                search_space=self.search_space,
-                bo_options=bo_options_test,
-                logger=self.logger
-            )
-            
-            # If we got here without exception, the strategy was accepted
-            self.assertIsInstance(context, CalibrationContext)
-
     def test_worker_configuration(self):
         """Test worker configuration calculation."""
         context = CalibrationContext(
@@ -284,9 +241,6 @@ class TestCalibrationContext(unittest.TestCase):
             'summary_function': 'custom_summary',
             'custom_run_single_replicate_func': lambda: None,
             'custom_aggregation_func': lambda: None,
-            'acq_func_strategy': 'combined',
-            'diversity_weight': 0.1,
-            'uncertainty_weight': 0.2
         })
         
         context = CalibrationContext(
@@ -306,11 +260,6 @@ class TestCalibrationContext(unittest.TestCase):
         self.assertEqual(context.summary_function, 'custom_summary')
         self.assertIsNotNone(context.custom_run_single_replicate_func)
         self.assertIsNotNone(context.custom_aggregation_func)
-        
-        # Check metadata includes strategy information
-        self.assertIn('Enhancement_Strategy', context.dic_metadata)
-        self.assertIn('Diversity_Weight', context.dic_metadata)
-        self.assertIn('Uncertainty_Weight', context.dic_metadata)
 
     def test_missing_column_error(self):
         """Test error when observed data column is missing."""
@@ -346,6 +295,7 @@ class TestRunBayesianOptimization(unittest.TestCase):
         self.mock_context.db_path = '/fake/path.db'
         self.mock_context.logger = self.logger
         self.mock_context.qoi_details = {'QOI_Name': ['obj1', 'obj2']}
+        self.mock_context.db_path_initial_samples = None
         
         # Patch PhysiCell_Model in the bo_context module so tests don't instantiate the real model
         # This keeps changes confined to tests and avoids touching core code.
@@ -379,7 +329,7 @@ class TestRunBayesianOptimization(unittest.TestCase):
         # Mock the generate_and_evaluate_samples method
         self.mock_context.num_initial_samples = 10
         self.mock_context.generate_and_evaluate_samples.return_value = (
-            torch.randn(10, 2), torch.randn(10, 2), torch.randn(10, 2), torch.randn(10, 2)
+            torch.randn(10, 2), torch.randn(10, 2), torch.randn(10, 2)
         )
         
         run_bayesian_optimization(self.mock_context)
@@ -394,7 +344,7 @@ class TestRunBayesianOptimization(unittest.TestCase):
         mock_multi_obj.assert_called_once()
         
         # Verify sample generation was called
-        self.mock_context.generate_and_evaluate_samples.assert_called_once_with(10, start_sample_id=0, iteration_id=0)
+        self.mock_context.generate_and_evaluate_samples.assert_called_once_with(start_sample_id=0, iteration_id=0)
 
     @patch('uq_physicell.bo.bo_context.os.path.exists')
     @patch('uq_physicell.bo.bo_context.single_objective_bayesian_optimization')
@@ -409,7 +359,7 @@ class TestRunBayesianOptimization(unittest.TestCase):
         # Mock required methods
         self.mock_context.num_initial_samples = 10
         self.mock_context.generate_and_evaluate_samples.return_value = (
-            torch.randn(10, 2), torch.randn(10, 1), torch.randn(10, 1), torch.randn(10, 1)
+            torch.randn(10, 2), torch.randn(10, 1), torch.randn(10, 1)
         )
         
         with patch('uq_physicell.bo.bo_context.create_structure'), \
@@ -431,8 +381,8 @@ class TestRunBayesianOptimization(unittest.TestCase):
         
         # Mock the load_existing_data method
         self.mock_context.load_existing_data.return_value = (
-            torch.randn(15, 2), torch.randn(15, 2), torch.randn(15, 2), 
-            torch.randn(15, 2), 2, 0.5  # latest_iteration, latest_hypervolume
+            torch.randn(15, 2), torch.randn(15, 2), torch.randn(15, 2),
+            2, 0.5  # latest_iteration, latest_hypervolume
         )
         
         run_bayesian_optimization(self.mock_context)
@@ -443,7 +393,7 @@ class TestRunBayesianOptimization(unittest.TestCase):
         # Verify multi-objective optimization was called with start_iteration=3
         mock_multi_obj.assert_called_once()
         args = mock_multi_obj.call_args[0]
-        start_iteration = args[5]  # 6th argument (0-indexed)
+        start_iteration = args[4]  # 5th argument (0-indexed)
         self.assertEqual(start_iteration, 3)
 
     @patch('uq_physicell.bo.bo_context.os.path.exists')
@@ -454,8 +404,8 @@ class TestRunBayesianOptimization(unittest.TestCase):
         
         # Mock the methods
         self.mock_context.load_existing_data.return_value = (
-            torch.randn(15, 2), torch.randn(15, 2), torch.randn(15, 2), 
-            torch.randn(15, 2), 2, 0.5
+            torch.randn(15, 2), torch.randn(15, 2), torch.randn(15, 2),
+            2, 0.5
         )
         
         with patch('uq_physicell.bo.bo_context.multi_objective_bayesian_optimization'):

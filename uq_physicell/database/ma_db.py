@@ -3,6 +3,7 @@ import sqlite3
 import pandas as pd
 import numpy as np
 import pickle
+import time
 
 from uq_physicell import PhysiCell_Model
 
@@ -291,15 +292,44 @@ def insert_output(db_file: str, sample_id: int, replicate_id: int, result_data: 
         >>> serialized_data = pickle.dumps(data)
         >>> insert_output('study.db', 0, 1, serialized_data)
     """
-    conn = sqlite3.connect(db_file)
-    cursor = conn.cursor()
+    conn = None
     try:
+        conn = sqlite3.connect(db_file, timeout=30.0)  # 30 second timeout for busy database
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")  # Enable Write-Ahead Logging for concurrent writes
+        cursor.execute("PRAGMA synchronous=NORMAL")  # Balance durability with performance
+        cursor.execute("PRAGMA busy_timeout=30000")  # 30 second busy timeout in milliseconds
         cursor.execute('INSERT INTO Output (SampleID, ReplicateID, Data) VALUES (?, ?, ?)',
                        (sample_id, int(replicate_id), sqlite3.Binary(result_data)))
         conn.commit()
-        conn.close()
     except sqlite3.Error as e:
         raise RuntimeError(f"Error inserting output into the database: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+def disable_wal_mode(db_file: str) -> None:
+    """Disable WAL mode and truncate WAL/SHM files if possible.
+
+    This function runs a WAL checkpoint and switches the journal mode back to
+    DELETE. It only succeeds if no other connections are open.
+
+    Args:
+        db_file (str): Path to the SQLite database file.
+
+    Raises:
+        RuntimeError: If the checkpoint or journal mode change fails.
+    """
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        cursor.execute("PRAGMA journal_mode=DELETE")
+        conn.commit()
+    except sqlite3.Error as e:
+        raise RuntimeError(f"Error disabling WAL mode: {e}")
+    finally:
+        conn.close()
 
 def load_metadata(db_file: str) -> pd.DataFrame:
     """Load metadata from the database.
@@ -628,6 +658,30 @@ def load_structure(db_file: str, load_result: bool = True) -> tuple:
         df_results = load_data_unserialized(db_file)
     
     return df_metadata, df_parameter_space, df_qois, dic_samples, df_results
+
+def check_db_consistency(db_file):
+    """Check database consistency for Samples and Output.
+    
+    This function verifies that all samples defined in the Samples table
+    have corresponding entries in the Output table. It return the missing entries.
+    
+    Args:
+        db_file (str): Path to the SQLite database file.
+    """
+    # Check if ParameterSpace matches the expected values
+    dic_samples_db = load_samples(db_file)
+    df_results = load_output(db_file, load_data=False)
+    samples_missing = []
+    for sample_id, params in dic_samples_db.items():
+        if sample_id not in set(df_results['SampleID'].values):
+            samples_missing.append(sample_id)
+    
+    for sample_id in samples_missing:
+            print(f"{len(samples_missing)} from Samples table is missing in Output table.\n Missing SampleIDs: {samples_missing}")
+            return False
+    print("All samples in Samples table have corresponding entries in Output table.")
+    return True
+
 
 def check_simulations_db(PhysiCellModel: PhysiCell_Model, sampler: str, param_dict: dict, 
                         dic_samples: dict, qois_dic: dict, db_file: str) -> tuple:

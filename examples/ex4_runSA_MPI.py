@@ -2,6 +2,7 @@ from uq_physicell import PhysiCell_Model, get_physicell
 from uq_physicell.model_analysis import ModelAnalysisContext, run_simulations
 
 from shutil import rmtree
+import os
 import pcdl
 import pandas as pd
 from mpi4py import MPI
@@ -69,7 +70,3 @@ if __name__ == "__main__":
     
     # All ranks participate in running simulations
     run_simulations(context)
-    
-    # Only rank 0 prints completion message
-    if rank == 0:
-        print(f"Simulations completed and results stored in the database: {context.db_path}.")
