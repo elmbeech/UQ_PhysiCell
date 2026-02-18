@@ -25,7 +25,7 @@ except ImportError:
 from uq_physicell import PhysiCell_Model
 from .samplers import run_local_sampler, run_global_sampler, run_local_sampler
 from ..utils.model_wrapper import run_replicate, run_replicate_serializable
-from ..database.ma_db import create_structure, insert_metadata, insert_param_space, insert_qois, insert_samples, insert_output, check_simulations_db
+from ..database.ma_db import create_structure, insert_metadata, insert_param_space, insert_qois, insert_samples, insert_output, check_simulations_db, disable_wal_mode
 
 
 class ModelAnalysisContext:
@@ -223,7 +223,7 @@ def run_simulations(context: ModelAnalysisContext):
         if info_output:
             context.logger.info(f"PhysiCell Model Information:\n{info_output}")
         
-        # Check if the sensitivity analysis already exists
+        # Check if the db file already exists
         try:
             exist_db, All_Parameters, All_Samples, All_Replicates = check_simulations_db(PhysiCellModel, context.dic_metadata['Sampler'], context.params_dict, context.dic_samples, context.qois_dict, context.db_path)
         except Exception as e: 
@@ -361,7 +361,7 @@ def run_simulations(context: ModelAnalysisContext):
     elif use_mpi:
         # Split simulations into ranks
         SplitIndexes = np.array_split(np.arange(len(All_Samples)), size, axis=0)
-        context.logger.info(f"Rank {rank} assigned {len(SplitIndexes[rank])} simulations.")
+        context.logger.info(f"Rank {rank} assigned {len(SplitIndexes[rank])} simulations: indices {SplitIndexes[rank].tolist() if len(SplitIndexes[rank]) > 0 else []}")
 
         # Run simulations (MPI)
         for ind_sim in SplitIndexes[rank]:
@@ -370,28 +370,28 @@ def run_simulations(context: ModelAnalysisContext):
                 break
             ParametersXML = {key: All_Parameters[ind_sim][key] for key in params_xml} if params_xml else np.array([])
             ParametersRules = {key: All_Parameters[ind_sim][key] for key in params_rules} if params_rules else np.array([])
-            if context.summary_function:
-                result_data_nonserialized = PhysiCellModel.RunModel(
-                    All_Samples[ind_sim], All_Replicates[ind_sim], ParametersXML, ParametersRules, RemoveConfigFile=True, SummaryFunction=context.summary_function)
-                result_data = pickle.dumps(result_data_nonserialized)
-            else:
-                _, _, result_data = run_replicate(PhysiCellModel, All_Samples[ind_sim], All_Replicates[ind_sim], ParametersXML,ParametersRules, context.qois_dict)
+            try:
+                if context.summary_function:
+                    result_data_nonserialized = PhysiCellModel.RunModel(
+                        All_Samples[ind_sim], All_Replicates[ind_sim], ParametersXML, ParametersRules, RemoveConfigFile=True, SummaryFunction=context.summary_function)
+                    result_data = pickle.dumps(result_data_nonserialized)
+                else:
+                    _, _, result_data = run_replicate(PhysiCellModel, All_Samples[ind_sim], All_Replicates[ind_sim], ParametersXML,ParametersRules, context.qois_dict)
+            except Exception as e:
+                context.logger.error(
+                    f"Rank {rank}: Error running simulation for Sample: {All_Samples[ind_sim]}, Replicate: {All_Replicates[ind_sim]}: {e}"
+                )
+                continue
 
-            # Token-passing mechanism to ensure one rank writes at a time
-            if rank > 0:
-                # Wait for the token from the previous rank
-                comm.recv(source=rank - 1, tag=0)
-            context.logger.info(f"Rank {rank} writing to the database for Sample: {All_Samples[ind_sim]}, Replicate: {All_Replicates[ind_sim]}")
+            # Write to database with retry logic
+            context.logger.info(f"Rank {rank} writing to database for Sample: {All_Samples[ind_sim]}, Replicate: {All_Replicates[ind_sim]}")
             try:
                 insert_output(context.db_path, All_Samples[ind_sim], All_Replicates[ind_sim], result_data)
-                context.logger.info(f"Rank {rank} finished writing to the database for Sample: {All_Samples[ind_sim]}, Replicate: {All_Replicates[ind_sim]}")
+                context.logger.info(f"Rank {rank} successfully wrote results for Sample: {All_Samples[ind_sim]}, Replicate: {All_Replicates[ind_sim]}")
             except Exception as e:
-                context.logger.error(f"Rank {rank}: Error writing to the database: {e}")
-                raise  # Re-raise to stop execution and prevent data corruption
+                context.logger.error(f"Rank {rank} failed to write results for Sample: {All_Samples[ind_sim]}, Replicate: {All_Replicates[ind_sim]}: {e}")
+                raise
 
-            # Pass the token to the next rank
-            if rank < size - 1:
-                comm.send(None, dest=rank + 1, tag=0)
         comm.Barrier()
         MPI.Finalize()
 
@@ -423,6 +423,11 @@ def run_simulations(context: ModelAnalysisContext):
             except Exception as e:
                 context.logger.error(f"Error inserting output into the database: {e}")
                 raise
+
+    if rank == 0:
+        print(f"Simulations completed and results stored in the database: {context.db_path}.")
+        # Disable WAL mode of the database to allow reading results without locks
+        disable_wal_mode(context.db_path)
             
 if __name__ == "__main__":
     pass

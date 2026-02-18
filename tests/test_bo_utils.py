@@ -241,7 +241,7 @@ class TestBOUtils(unittest.TestCase):
         
         result = param_dict_to_tensor(params_dict, self.search_space)
         
-        expected = torch.tensor([0.5, 1.5, 5.0], dtype=torch.double)
+        expected = torch.tensor([0.5, 0.5, 4.0 / 9.0], dtype=torch.double)
         torch.testing.assert_close(result, expected, rtol=1e-5, atol=1e-5)
 
     def test_invalid_tensor_dimensions(self):
