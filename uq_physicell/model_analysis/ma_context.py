@@ -383,16 +383,14 @@ def run_simulations(context: ModelAnalysisContext):
                 )
                 continue
 
-            # Write to database with WAL mode handling concurrent writes
-            context.logger.info(f"Rank {rank} writing to the database for Sample: {All_Samples[ind_sim]}, Replicate: {All_Replicates[ind_sim]}")
+            # Write to database with retry logic
+            context.logger.info(f"Rank {rank} writing to database for Sample: {All_Samples[ind_sim]}, Replicate: {All_Replicates[ind_sim]}")
             try:
                 insert_output(context.db_path, All_Samples[ind_sim], All_Replicates[ind_sim], result_data)
-                context.logger.info(f"Rank {rank} finished writing to the database for Sample: {All_Samples[ind_sim]}, Replicate: {All_Replicates[ind_sim]}")
+                context.logger.info(f"Rank {rank} successfully wrote results for Sample: {All_Samples[ind_sim]}, Replicate: {All_Replicates[ind_sim]}")
             except Exception as e:
-                context.logger.error(
-                    f"Rank {rank}: Error writing to the database for Sample: {All_Samples[ind_sim]}, Replicate: {All_Replicates[ind_sim]}: {e}"
-                )
-                continue
+                context.logger.error(f"Rank {rank} failed to write results for Sample: {All_Samples[ind_sim]}, Replicate: {All_Replicates[ind_sim]}: {e}")
+                raise
 
         comm.Barrier()
         MPI.Finalize()
