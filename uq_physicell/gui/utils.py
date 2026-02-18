@@ -132,15 +132,42 @@ def plot_local_sa_results(sa_method, qoi_time_values, sa_results, selected_qoi, 
         ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left", title_fontsize=8, fontsize=8)
 
 
-def plot_cells_2D(df_cells, color_dic, ax, scale_bar=False, bar_size=200, axes_visible=False, feature='cell_type'):
+def plot_cells_2D(df_cells, color_dic=None, ax=None, scale_bar=False, bar_size=200, axes_visible=False, feature='cell_type', cmap='viridis', vmin=None, vmax=None):
     import matplotlib.pyplot as plt
+    import matplotlib.colors as mcolors
+    import pandas as pd
     from matplotlib.collections import PatchCollection
     from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
+
+    if ax is None:
+        raise ValueError("'ax' must be provided.")
+
     patches = []
     for index, row in df_cells.iterrows():
         circle = plt.Circle((row['position_x'], row['position_y']), row['radius'])
         patches.append(circle)
-    collection = PatchCollection(patches, facecolors=[color_dic[ct] for ct in df_cells[feature]], edgecolors='black', linewidths=0.5)
+
+    collection = PatchCollection(patches, edgecolors='black', linewidths=0.5)
+    
+    if color_dic is not None:
+        facecolors = [color_dic[ct] for ct in df_cells[feature]]
+        collection.set_facecolors(facecolors)
+    elif pd.api.types.is_numeric_dtype(df_cells[feature]):
+        feature_values = df_cells[feature].astype(float).to_numpy()
+        min_value = feature_values.min() if vmin is None else vmin
+        max_value = feature_values.max() if vmax is None else vmax
+        if min_value == max_value:
+            max_value = min_value + 1e-12
+        norm = mcolors.Normalize(vmin=min_value, vmax=max_value)
+        collection.set_array(feature_values)
+        collection.set_cmap(cmap)
+        collection.set_norm(norm)
+    else:
+        unique_values = list(df_cells[feature].dropna().unique())
+        cmap_obj = plt.get_cmap(cmap, max(len(unique_values), 1))
+        local_color_dic = {value: cmap_obj(idx) for idx, value in enumerate(unique_values)}
+        facecolors = [local_color_dic[value] for value in df_cells[feature]]
+        collection.set_facecolors(facecolors)
     ax.add_collection(collection)
     ax.set_aspect('equal')
     ax.autoscale_view()
@@ -156,3 +183,4 @@ def plot_cells_2D(df_cells, color_dic, ax, scale_bar=False, bar_size=200, axes_v
                       pad=0.1, borderpad=0.5, sep=5, size_vertical=20,
                       frameon=False)
         ax.add_artist(asb)
+    return collection
