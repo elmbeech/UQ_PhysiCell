@@ -120,11 +120,24 @@ def plot_parameter_vs_fitness(df_samples:pd.DataFrame, df_output:pd.DataFrame, p
         ax.set_title(f"Parameter vs Objective: {parameter_name} vs {qoi_name}")
     else:
         ax = axis
-
-    ax.scatter(df_sorted_params['ParamValue'], df_sorted_fitness['ObjFunc'], marker='o', c='gray', zorder=1)
+ 
     if samples_id:
-        ax.scatter(df_sorted_params.loc[df_sorted_params['SampleID'].isin(samples_id)]['ParamValue'], 
-                   df_sorted_fitness.loc[df_sorted_fitness['SampleID'].isin(samples_id), 'ObjFunc'], c='red', label='Selected Samples', marker='x', zorder=2)
+        # Plot non-selected samples in gray
+        df_non_selected = df_sorted_params[~df_sorted_params['SampleID'].isin(samples_id)].copy()
+        # Merge with fitness values using SampleID
+        df_non_selected = df_non_selected.merge(df_sorted_fitness[['SampleID', 'ObjFunc']], on='SampleID', how='left')
+        # print(f"Non-selected samples with fitness:\n{df_non_selected.head()}")
+        ax.scatter(df_non_selected['ParamValue'], df_non_selected['ObjFunc'], marker='o', c='gray', zorder=1)
+        # Plot selected samples
+        df_selected = df_sorted_params[df_sorted_params['SampleID'].isin(samples_id)].copy()
+        # Merge with fitness values using SampleID
+        df_selected = df_selected.merge(df_sorted_fitness[['SampleID', 'ObjFunc']], on='SampleID', how='left')
+        sns.scatterplot(df_selected, x='ParamValue', y='ObjFunc', hue='SampleID', ax=ax, marker='X', zorder=2, palette="deep", s=100)
+        # ax.scatter(df_selected['ParamValue'], df_sorted_fitness.loc[df_sorted_fitness['SampleID'].isin(samples_id), 'ObjFunc'], c='red', label='Selected Samples', marker='x', zorder=2)
+    else:
+        # Plot all samples in gray
+        ax.scatter(df_sorted_params['ParamValue'], df_sorted_fitness['ObjFunc'], marker='o', c='gray', zorder=1)
+
     ax.set_xlabel(parameter_name)
     ax.set_ylabel(f"Fitness({qoi_name})")
 
@@ -193,7 +206,7 @@ def plot_qoi_param(df_ObsData:pd.DataFrame, df_output:pd.DataFrame, samples_id:l
     # Add formatted SampleID for better legend display
     all_df_data['SampleID_formatted'] = all_df_data['SampleID'].apply(lambda x: f'SampleID: {x}')
     if not all_df_data.empty:
-        if all_df_data[y_var].nunique() > 1:  # Ensure there are multiple y values to plot
+        if df_ObsData[y_var].nunique() > 1:  # Ensure there are multiple y values to plot
             sns.lineplot(data=all_df_data, x=x_var, y=y_var, ax=ax,
                 hue='SampleID_formatted', units='replicateID', dashes=(4,2), estimator=None)
         else:
