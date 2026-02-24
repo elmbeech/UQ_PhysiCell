@@ -136,7 +136,7 @@ def create_named_function_from_string(func_str: str, qoi_name: str) -> callable:
         arg_name = 'mcds'
     
     # Create a restricted namespace with necessary imports and no built-in functions
-    namespace = {'pd': pd, 'np': np, 'len': len, '__builtins__': {}}
+    namespace = {'pd': pd, 'np': np, 'len': len, 'sum': sum, 'map': map, '__builtins__': {}}
     
     # Evaluate the lambda function once at creation time
     try:
