@@ -145,6 +145,57 @@ def plot_parameter_vs_fitness(df_samples:pd.DataFrame, df_output:pd.DataFrame, p
         plt.tight_layout()
         return fig, ax
 
+def plot_pareto_front(df_output:pd.DataFrame, qoi_name1:str, qoi_name2:str, samples_id=None, axis=None):
+    """
+    Plot the Pareto front of the fitness values.
+    Parameters:
+    - df_output: DataFrame containing the output of the analysis.
+    - qoi_name1: Name of the QoI to plot in x axis
+    - qoi_name2: Name of the QoI to plot in y axis
+    - axis: Matplotlib axis to plot on (optional).
+    Returns:
+    - Matplotlib figure and axis if axis is None, otherwise returns the axis.
+    """
+
+    # Plotting
+    if axis is None:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.set_title(f"Pareto Front: {qoi_name1} vs {qoi_name2}")
+    else:
+        ax = axis
+    
+    # Find the corresponding fitness values for the sorted SampleIDs
+    for sample_id in df_output['SampleID']:
+        df_output.loc[df_output['SampleID'] == sample_id, qoi_name1] = df_output.loc[df_output['SampleID'] == sample_id, 'ObjFunc'].values[0][qoi_name1]
+        df_output.loc[df_output['SampleID'] == sample_id, qoi_name2] = df_output.loc[df_output['SampleID'] == sample_id, 'ObjFunc'].values[0][qoi_name2]
+
+    # Plot non-selected samples in gray
+    df_dominated = df_output[~df_output['SampleID'].isin(samples_id)].copy()
+    df_nondominated = df_output[df_output['SampleID'].isin(samples_id)].copy()
+    sns.scatterplot(df_nondominated, x=qoi_name1, y=qoi_name2, hue='SampleID', ax=ax, marker='X', zorder=2, palette="deep", s=100)
+    sns.scatterplot(df_dominated, x=qoi_name1, y=qoi_name2, ax=ax, marker='o', zorder=1, color='gray', s=100, label='Dominated', legend=False)
+
+    # Plot the Reference Point (Ideal Point)
+    ax.axvline(x=1, color='red', linestyle='--', alpha=0.3)
+    ax.axhline(y=1, color='red', linestyle='--', alpha=0.3)
+    ax.scatter(1, 1, color='red', marker='*', s=200, label='Ideal Point', zorder=3)
+
+    # Combine all legend handles and labels
+    handles, labels = ax.get_legend_handles_labels()
+    # Modify labels to have cleaner names
+    new_labels = [f'Sample ID: {label}' if label not in ['Dominated', 'Ideal Point'] else label for label in labels]
+    nondominated_handles = [
+        ax.scatter([], [], marker='X', s=100, color='gray', edgecolors='gray', linewidth=0.2, label='Non-Dominated', zorder=2)
+    ]
+    ax.legend(nondominated_handles+handles, ['Non-Dominated'] + new_labels)
+
+    ax.set_xlabel(qoi_name1)
+    ax.set_ylabel(qoi_name2)
+
+    if axis is None:
+        plt.tight_layout()
+        return fig, ax
+
 def plot_parameter_vs_fitness_db(db_file:str, parameter_name:str, qoi_name:str, axis=None):
     """
     Plot the parameter space against the fitness values from the database file.
@@ -160,7 +211,7 @@ def plot_parameter_vs_fitness_db(db_file:str, parameter_name:str, qoi_name:str, 
     df_metadata, df_param_space, df_qois, df_gp_models, df_samples, df_output = load_structure(db_file)
     return plot_parameter_vs_fitness(df_samples, df_output, parameter_name, qoi_name, axis)
 
-def plot_qoi_param(df_ObsData:pd.DataFrame, df_output:pd.DataFrame, samples_id:list, x_var: str, y_var:str, axis=None):
+def plot_qoi_param(df_ObsData:pd.DataFrame, df_output:pd.DataFrame, samples_id:list, x_var: str, y_var:str, axis=None, swarmplot=False):
     """
     Plot the QoI parameter space from the database file.
     Parameters:
@@ -170,6 +221,7 @@ def plot_qoi_param(df_ObsData:pd.DataFrame, df_output:pd.DataFrame, samples_id:l
     - x_var: Variable to plot on the x-axis.
     - y_var: Variable to plot on the y-axis.
     - axis: Matplotlib axis to plot on (optional).
+    - swarmplot: Whether to use swarmplot instead of scatterplot.
     Returns:
     - Matplotlib figure and axis if axis is None, otherwise returns the axis.
     """
@@ -189,7 +241,7 @@ def plot_qoi_param(df_ObsData:pd.DataFrame, df_output:pd.DataFrame, samples_id:l
         sns.lineplot(df_ObsData, x=x_var, y=y_var, color='red', label='Observed QoI', linewidth=3, ax=ax)
     else:
         # sns.scatterplot(df_ObsData, x=x_var, y=y_var, color='red', label='Observed QoI', ax=ax)
-        ax.axhline(y=df_ObsData[y_var].dropna().values[0], color='red', label='Observed QoI', linestyle='--')
+        ax.axhline(y=df_ObsData[y_var].dropna().values[0], color='red', label='Observed QoI', linewidth=3)
 
     all_df_data = pd.DataFrame()
     # Plot each QoI against the model results associated with the dic_param
@@ -210,8 +262,10 @@ def plot_qoi_param(df_ObsData:pd.DataFrame, df_output:pd.DataFrame, samples_id:l
             sns.lineplot(data=all_df_data, x=x_var, y=y_var, ax=ax,
                 hue='SampleID_formatted', units='replicateID', dashes=(4,2), estimator=None)
         else:
-            sns.scatterplot(data=all_df_data, x=x_var, y=y_var, ax=ax,
-                hue='SampleID_formatted', style='replicateID', s=50, alpha=0.5)
+            if not swarmplot:
+                sns.scatterplot(data=all_df_data, x=x_var, y=y_var, ax=ax, hue='SampleID_formatted', s=50)
+            else: 
+                sns.swarmplot(data=all_df_data, y=y_var, ax=ax, hue='SampleID_formatted')
 
     ax.set_xlabel(x_var)
     ax.set_ylabel(y_var)
