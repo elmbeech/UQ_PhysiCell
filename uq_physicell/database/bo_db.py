@@ -2,8 +2,19 @@ import sqlite3
 import pandas as pd
 import io
 import pickle
-import torch
-from botorch.models.model_list_gp_regression import ModelListGP
+import warnings
+from typing import Any, TYPE_CHECKING
+
+try:
+    import torch
+except ImportError:
+    torch = None
+    warnings.warn("PyTorch is not available. GP model serialization/deserialization will be disabled.")
+
+if TYPE_CHECKING:
+    from botorch.models.model_list_gp_regression import ModelListGP
+else:
+    ModelListGP = Any
 
 def create_structure(db_path:str):
     """
@@ -156,6 +167,8 @@ def insert_gp_models(db_path:str, iteration_id:int, gp_model:ModelListGP, hyperv
     - hypervolume: The hypervolume value for this iteration.
     """
     try:
+        if torch is None:
+            raise RuntimeError("PyTorch is not available. Cannot serialize GP models.")
         # Serialize the GP model into a binary object
         buffer = io.BytesIO()
         torch.save(gp_model.state_dict(), buffer, _use_new_zipfile_serialization=False)
@@ -332,6 +345,8 @@ def load_gp_models(db_file: str) -> pd.DataFrame:
     conn = sqlite3.connect(db_file)
     cursor = conn.cursor()
     try:
+        if torch is None:
+            raise RuntimeError("PyTorch is not available. Cannot deserialize GP models.")
         cursor.execute('SELECT * FROM GP_Models')
         gp_models = cursor.fetchall()
         df_gp_models = pd.DataFrame(gp_models, columns=['IterationID', 'GP_Model', 'Hypervolume'])
