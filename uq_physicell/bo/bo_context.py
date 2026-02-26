@@ -7,24 +7,33 @@ import pickle
 import numpy as np
 import pandas as pd
 from scipy.spatial.distance import pdist
-import torch
 from typing import Union, Optional
+import warnings
 
 # BoTorch imports
-from botorch.optim.optimize import optimize_acqf
-from botorch.utils.sampling import draw_sobol_samples
-from botorch import fit_gpytorch_mll
-from botorch.utils.multi_objective.pareto import is_non_dominated
-from botorch.acquisition.multi_objective.logei import qLogNoisyExpectedHypervolumeImprovement
-from botorch.acquisition.logei import qLogExpectedImprovement
-from botorch.models.gp_regression import SingleTaskGP
-from botorch.models.model_list_gp_regression import ModelListGP
-from botorch.models.multitask import MultiTaskGP
-from botorch.sampling.normal import SobolQMCNormalSampler
+try:
+    import torch
+    from botorch.optim.optimize import optimize_acqf
+    from botorch.utils.sampling import draw_sobol_samples
+    from botorch import fit_gpytorch_mll
+    from botorch.utils.multi_objective.pareto import is_non_dominated
+    from botorch.acquisition.multi_objective.logei import qLogNoisyExpectedHypervolumeImprovement
+    from botorch.acquisition.logei import qLogExpectedImprovement
+    from botorch.models.gp_regression import SingleTaskGP
+    from botorch.models.model_list_gp_regression import ModelListGP
+    from botorch.models.multitask import MultiTaskGP
+    from botorch.sampling.normal import SobolQMCNormalSampler
+except ImportError:
+    torch = None
+    warnings.warn("PyTorch is not available. GP modeling and Bayesian optimization functionalities will be disabled. Please install PyTorch to use these features.")
 
 # GPyTorch imports
-from gpytorch.mlls.sum_marginal_log_likelihood import SumMarginalLogLikelihood
-from gpytorch.mlls import ExactMarginalLogLikelihood
+try:
+    from gpytorch.mlls.sum_marginal_log_likelihood import SumMarginalLogLikelihood
+    from gpytorch.mlls import ExactMarginalLogLikelihood
+except ImportError:
+    gpytorch = None
+    warnings.warn("GPyTorch is not available. GP modeling functionalities will be disabled. Please install GPyTorch to use these features.")
 
 # Local module imports
 from uq_physicell import PhysiCell_Model
@@ -74,6 +83,8 @@ class CalibrationContext:
         logger: logging.Logger=None
     ):
         """Initialize CalibrationContext with comprehensive validation and setup."""
+        if torch is None or gpytorch is None:
+            raise ImportError("PyTorch and GPyTorch are required for CalibrationContext. Please install these libraries to use this functionality.")
         # Core configuration
         self.db_path = db_path
         self.model_config = model_config
