@@ -135,7 +135,19 @@ class MainWindow(QMainWindow):
         
         # Start the message processing timer after initializing all UI components
         self.start_message_processing()
-        
+
+        # Process command line argument
+        args = QApplication.arguments()
+        if len(args) > 1:
+            if args[1].lower().endswith('xml'):
+                load_xml_file(self, filePath=args[1])
+            elif args[1].lower().endswith('ini'):
+                load_ini_file(self, filePath=args[1])
+            elif args[1].lower().endswith('db'):
+                load_db_file(self, filePath=args[1])
+            else:
+                pass
+
     def _process_message_queue(self):
         """Process messages from the queue and update the appropriate widget safely in the main thread."""
         try:
