@@ -76,7 +76,8 @@ autodoc_default_options = {
     'undoc-members': True,
     'show-inheritance': True,
     'member-order': 'bysource',  # Keep source order
-    'special-members': '__init__',
+    # 'special-members': '__init__',
+    'autoclass_content': 'both',  # Include both class docstring and __init__ docstring
     'exclude-members': '__weakref__'
 }
 
