@@ -60,7 +60,7 @@ class CalibrationContext:
     """
     Context for Bayesian Optimization calibration for single objective or multi-objective.
     
-    Attributes:
+    Args:
         db_path (str): Path to the database file for storing and retrieving samples.
         obsData (str or dict): Path or dict containing the observed data.
         obsData_columns (dict): Dictionary mapping QoI names to their corresponding columns in the observed data.
@@ -69,9 +69,8 @@ class CalibrationContext:
         distance_functions (dict): Dictionary of functions to compute distances between model outputs and observed data.
         search_space (dict): Dictionary defining the search space for parameters, including bounds and types.
         bo_options (dict): Options for Bayesian Optimization including sampling parameters.
-                          - 'use_correlated_gp' (bool): If True, use MultiTaskGP to model correlations between 
-                                                        objectives. If False (default), use independent GPs per objective.
-                          - Other options: num_initial_samples, num_iterations, batch_size_per_iteration, etc.
+                            - 'use_correlated_gp' (bool): If True, use MultiTaskGP to model correlations between objectives. If False (default), use independent GPs per objective.
+                            - Other options: num_initial_samples, num_iterations, batch_size_per_iteration, etc.
         logger (logging.Logger): Logger instance for logging messages during the calibration process.
     """
     
