@@ -34,6 +34,8 @@ def run_replicate(PhysiCellModel: PhysiCell_Model, sample_id: int, replicate_id:
         tuple: A 3-tuple containing (sample_id, replicate_id, result_data) where:
             - If qoi_functions provided: result_data contains calculated QoI values
             - If qoi_functions is None: result_data contains list of MCDS objects
+    Note:
+        If custom_summary_function is provided, qois_dic and drop_columns are not used.
     """
     if custom_summary_function:
         # Use the enhanced RunModel method that tracks processes
@@ -64,9 +66,9 @@ def run_replicate_serializable(PhysiCellModel_conf:dict, sampleID:int, replicate
                                ParametersXML:dict, ParametersRules:dict, qoi_functions:Union[dict, None]=None, 
                                return_binary_output:bool=True, drop_columns: Union[list, None] = None, custom_summary_function:Union[callable, None]=None) -> tuple:
     """
-    Run a single replicate of the PhysiCell model and return the results.
+    Run a single replicate of the PhysiCell model and return the results. This wrapper function initializes the PhysiCell model and then calls the run_replicate function to execute the simulation. It is designed to be serializable for use in parallel processing contexts.
     
-    Parameters:
+    Args:
         PhysiCellModel_conf (dict): Configuration dictionary for the PhysiCell model with ini_path and struc_name.
         sampleID (int): Sample ID.
         replicateID (int): Replicate ID.
@@ -83,7 +85,9 @@ def run_replicate_serializable(PhysiCellModel_conf:dict, sampleID:int, replicate
                                                    Defaults to None.
     
     Returns:
-        tuple: (sampleID, replicateID, result_data)
+        tuple: A 3-tuple containing (sample_id, replicate_id, result_data) where:
+            - If qoi_functions provided: result_data contains calculated QoI values
+            - If qoi_functions is None: result_data contains list of MCDS objects
     
     Note:
         If custom_summary_function is provided, qois_dic and drop_columns are not used.

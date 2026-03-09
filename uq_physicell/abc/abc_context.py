@@ -28,7 +28,7 @@ class CalibrationContext:
     using ABC-SMC with sophisticated handling of multiple models, parallel computation,
     and adaptive strategies.
 
-    Attributes:
+    Args:
         db_path (str): Path to the database file for storing and retrieving calibration results.
         obsData (str or dict): Path to observed data CSV file or dictionary containing observed data.
         obsData_columns (dict): Dictionary mapping QoI names to their corresponding columns in the observed data.
