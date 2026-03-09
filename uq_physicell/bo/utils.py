@@ -1,7 +1,19 @@
 import pandas as pd
-from typing import Union
-import torch
+from typing import Union, Any, TYPE_CHECKING
+import warnings
+
 from ..database.bo_db import load_structure
+
+try:
+    import torch
+except ImportError:
+    torch = None
+    warnings.warn("PyTorch is not available. GP modeling and Bayesian optimization functionalities will be disabled.")
+
+if TYPE_CHECKING:
+    from torch import Tensor as torch_Tensor
+else:
+    torch_Tensor = Any
 
 def normalize_params_df(df_params, df_search_space) -> pd.DataFrame:
     """
@@ -64,7 +76,6 @@ def extract_all_pareto_points(df_qois: pd.DataFrame, df_samples: pd.DataFrame, d
     Returns:
         dict: Contains all Pareto points and their corresponding sample IDs and parameters
     """
-    import torch
     import numpy as np
     from botorch.utils.multi_objective.pareto import is_non_dominated
     
@@ -171,14 +182,14 @@ def get_observed_qoi(obsDataFile:str, df_qois:pd.DataFrame) -> pd.DataFrame:
     df_obs_qoi = df_obs_qoi.rename(columns=dic_columns)
     return df_obs_qoi
 
-def normalize_params(params: torch.Tensor, search_space: dict) -> torch.Tensor:
+def normalize_params(params: torch_Tensor, search_space: dict) -> torch_Tensor:
     """
     Normalize parameters to the range [0, 1] based on the search space.
     Args:
-        params (torch.Tensor): Tensor containing parameter values.
+        params (torch_Tensor): Tensor containing parameter values.
         search_space (dict): Dictionary defining the search space.
     Returns:
-        torch.Tensor: Normalized tensor of parameters in the range [0, 1].
+        torch_Tensor: Normalized tensor of parameters in the range [0, 1].
     """
     normalized_params = []
     # Handle both 1D and 2D tensors by flattening if necessary
@@ -196,17 +207,17 @@ def normalize_params(params: torch.Tensor, search_space: dict) -> torch.Tensor:
         normalized_params.append(normalized_value)
     return torch.tensor(normalized_params, dtype=torch.double)
 
-def unnormalize_params(normalized_params: torch.Tensor, search_space: dict) -> torch.Tensor:
+def unnormalize_params(normalized_params: torch_Tensor, search_space: dict) -> torch_Tensor:
     """
     Unnormalize parameters from the range [0, 1] back to their original scale.
     Supports both single parameter vectors and batches of parameter vectors.
     
     Args:
-        normalized_params (torch.Tensor): Tensor containing normalized parameter values.
+        normalized_params (torch_Tensor): Tensor containing normalized parameter values.
                                         Shape: (n_params,) for single vector or (batch_size, n_params) for batch
         search_space (dict): Dictionary defining the search space.
     Returns:
-        torch.Tensor: Unnormalized tensor of parameters with same shape as input.
+        torch_Tensor: Unnormalized tensor of parameters with same shape as input.
     """
     if normalized_params.dim() == 1:
         # Single parameter vector case
@@ -248,13 +259,13 @@ def unnormalize_params(normalized_params: torch.Tensor, search_space: dict) -> t
     else:
         raise ValueError(f"unnormalize_params expects 1D or 2D tensors, got {normalized_params.dim()}D tensor with shape {normalized_params.shape}")
 
-def tensor_to_param_dict(params_tensor: torch.Tensor, search_space: dict):
+def tensor_to_param_dict(params_tensor: torch_Tensor, search_space: dict):
     """
     Convert a tensor of parameters to parameter dictionary(ies) based on the search space.
     Supports both single parameter vectors and batches of parameter vectors.
     
     Args:
-        params_tensor (torch.Tensor): Tensor containing parameter values.
+        params_tensor (torch_Tensor): Tensor containing parameter values.
                                      Shape: (n_params,) for single vector or (batch_size, n_params) for batch
         search_space (dict): Dictionary defining the search space.
     Returns:
@@ -286,14 +297,14 @@ def tensor_to_param_dict(params_tensor: torch.Tensor, search_space: dict):
     else:
         raise ValueError(f"tensor_to_param_dict expects 1D or 2D tensors, got {params_tensor.dim()}D tensor with shape {params_tensor.shape}")
 
-def param_dict_to_tensor(params_dict:dict, search_space:dict) -> torch.Tensor:
+def param_dict_to_tensor(params_dict:dict, search_space:dict) -> torch_Tensor:
     """
     Convert a dictionary of parameters to a normalized tensor in the range [0, 1] based on the search space.
     Args:
         params_dict (dict): Dictionary containing parameter names and their corresponding values.
         search_space (dict): Dictionaries defining the search space with 'lower_bound' and 'upper_bound'.
     Returns:
-        torch.Tensor: Tensor containing normalized parameter values in the range [0, 1].
+        torch_Tensor: Tensor containing normalized parameter values in the range [0, 1].
     """
     params_list = []
     for param in search_space.keys():

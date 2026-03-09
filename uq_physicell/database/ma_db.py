@@ -7,7 +7,7 @@ import time
 
 from uq_physicell import PhysiCell_Model
 
-def safe_pickle_loads(data):
+def _safe_pickle_loads(data):
     """Safely deserialize pickled data from SQLite BLOB storage.
     
     This function handles different data types that might be returned from SQLite
@@ -22,12 +22,6 @@ def safe_pickle_loads(data):
     Raises:
         RuntimeError: If data remains in binary format after deserialization attempts.
     
-    Example:
-        >>> import pickle
-        >>> original_data = {'key': 'value'}
-        >>> serialized = pickle.dumps(original_data)
-        >>> result = safe_pickle_loads(serialized)
-        >>> print(result)  # {'key': 'value'}
     """
     # If data is None or empty, return as-is
     if data is None or data == b'':
@@ -215,15 +209,15 @@ def insert_qois(db_file: str, qois_dic: dict):
     Args:
         db_file (str): Path to the SQLite database file.
         qois_dic (dict): Dictionary of QoIs where keys are QoI names and values 
-            are either lambda functions or string representations of functions.
+            are string representations of functions.
     
     Raises:
         RuntimeError: If QoI insertion fails due to database errors.
     
     Example:
         >>> qois = {
-        ...     'total_cells': lambda data: data['cell_count'].sum(),
-        ...     'max_radius': 'lambda data: data["radius"].max()'
+        ...     'total_cells': "lambda data: data['cell_count'].sum()",
+        ...     'max_radius': "lambda data: data['radius'].max()"
         ... }
         >>> insert_qois('study.db', qois)
     """
@@ -288,7 +282,7 @@ def insert_output(db_file: str, sample_id: int, replicate_id: int, result_data: 
     
     Example:
         >>> import pickle
-        >>> data = {'cells': [1, 2, 3], 'time': [0, 1, 2]}
+        >>> data = pd.DataFrame({'time': [0, 1, 2], 'cells': [1, 2, 3]})
         >>> serialized_data = pickle.dumps(data)
         >>> insert_output('study.db', 0, 1, serialized_data)
     """
@@ -308,7 +302,7 @@ def insert_output(db_file: str, sample_id: int, replicate_id: int, result_data: 
         if conn:
             conn.close()
 
-def disable_wal_mode(db_file: str) -> None:
+def _disable_wal_mode(db_file: str) -> None:
     """Disable WAL mode and truncate WAL/SHM files if possible.
 
     This function runs a WAL checkpoint and switches the journal mode back to
@@ -529,7 +523,7 @@ def load_output(db_file: str, sample_ids: list = None, replicate_ids: list = Non
         if load_data:
             df_output = pd.DataFrame(output, columns=['SampleID', 'ReplicateID', 'Data'])
             # Deserialize the Data column
-            df_output['Data'] = df_output['Data'].apply(safe_pickle_loads)
+            df_output['Data'] = df_output['Data'].apply(_safe_pickle_loads)
         else:
             df_output = pd.DataFrame(output, columns=['SampleID', 'ReplicateID'])
             # Placeholder column for consistency, dataframe is db from summary function or list of mcds
@@ -611,12 +605,12 @@ def load_structure(db_file: str, load_result: bool = True) -> tuple:
     
     This is a convenience wrapper function that calls all modular load functions.
     For more control over what data is loaded, use the individual load functions:
-    - load_metadata(db_file)
-    - load_parameter_space(db_file)
-    - load_qois(db_file)
-    - load_samples(db_file)
-    - load_output(db_file, sample_ids=None, replicate_ids=None, load_data=True)
-    - load_data_unserialized(db_file, sample_ids=None, replicate_ids=None)
+        - load_metadata(db_file)
+        - load_parameter_space(db_file)
+        - load_qois(db_file)
+        - load_samples(db_file)
+        - load_output(db_file, sample_ids=None, replicate_ids=None, load_data=True)
+        - load_data_unserialized(db_file, sample_ids=None, replicate_ids=None)
     
     Args:
         db_file (str): Path to the SQLite database file.

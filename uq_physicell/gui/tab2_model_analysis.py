@@ -641,7 +641,7 @@ def open_qoi_definition_window(main_window):
             'template_meanSubstrate': "lambda df_subs: df_subs[ <substrateName>].mean() \n # Replace <substrateName> with the desired substrate name",
             'template_stdSubstrate': "lambda df_subs: df_subs[ <substrateName>].std() \n # Replace <substrateName> with the desired substrate name",
             'template_cellType_meanRadialDistance': "lambda df: df[ df['cell_type'] == <cellType> ][['position_x', 'position_y', 'position_z']].apply(lambda row: ((row['position_x']**2 + row['position_y']**2 + row['position_z']**2)**0.5), axis=1).mean() \n # Replace <cellType> with the desired cell type name",
-            # 'Persistent homology - Vectorisation (muspan - topological data analysis)': "lambda df: compute_persistent_homology(df)",
+            # 'Persistent homology - Vectorisation (muspan - topological data analysis)': "lambda df: _compute_persistent_homology(df)",
         }
 
     # Reset the qois

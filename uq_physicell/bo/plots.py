@@ -8,14 +8,16 @@ from ..database.bo_db import load_structure
 
 def plot_parameter_space(df_samples:pd.DataFrame, df_param_space:pd.DataFrame, params:dict=None, real_value:dict=None, axis=None):
     """    Plot the parameter space from the samples DataFrame.
-    Parameters:
-    - df_samples: DataFrame containing the samples.
-    - df_param_space: DataFrame defining the search space for each parameter.
-    - params: Dictionary with parameter names as keys and their best values as values (optional).
-    - real_value: Dictionary with real parameter values to plot (optional).
-    - axis: Matplotlib axis to plot on (optional).
+
+    Args:
+        df_samples: DataFrame containing the samples.
+        df_param_space: DataFrame defining the search space for each parameter.
+        params: Dictionary with parameter names as keys and their best values as values (optional).
+        real_value: Dictionary with real parameter values to plot (optional).
+        axis: Matplotlib axis to plot on (optional).
+    
     Returns:
-    - Matplotlib figure and axis if axis is None, otherwise returns the axis.
+        Matplotlib figure and axis if axis is None, otherwise draw in the given axis.
     """
     # Normalize the parameter space
     df_plot = normalize_params_df(df_samples, df_param_space)
@@ -46,7 +48,7 @@ def plot_parameter_space(df_samples:pd.DataFrame, df_param_space:pd.DataFrame, p
     if params:
         for key, param in params.items():
             param_df = pd.DataFrame(param.items(), columns=['ParamName', 'ParamValue'])
-            param_df['SampleID'] = id  # Add SampleID as 1 for best parameters
+            param_df['SampleID'] = key  # Add SampleID as key for best parameters
             param_norm = normalize_params_df(param_df, df_param_space)
             param_scatter = ax.scatter(param_norm['ParamValue'], param_norm['ParamName'], marker='x', s=100, zorder=5)
             special_handles.append(param_scatter)
@@ -80,13 +82,15 @@ def plot_parameter_space(df_samples:pd.DataFrame, df_param_space:pd.DataFrame, p
 def plot_parameter_space_db(db_file:str, params:dict=None, real_value:dict=None, axis=None):
     """
     Plot the parameter space from the database file.
-    Parameters:
-    - db_file: Path to the database file.
-    - params: Dictionary with parameter names as keys and their best values as values (optional).
-    - real_value: Dictionary with real parameter values to plot (optional).
-    - axis: Matplotlib axis to plot on (optional).
+
+    Args:
+        db_file: Path to the database file.
+        params: Dictionary with parameter names as keys and their best values as values (optional).
+        real_value: Dictionary with real parameter values to plot (optional).
+        axis: Matplotlib axis to plot on (optional).
+
     Returns:
-    - Matplotlib figure and axis if axis is None, otherwise returns the axis.
+        Matplotlib figure and axis if axis is None, otherwise draw in the given axis.
     """
     # Load the database structure
     df_metadata, df_param_space, df_qois, df_gp_models, df_samples, df_output  = load_structure(db_file)
@@ -95,14 +99,17 @@ def plot_parameter_space_db(db_file:str, params:dict=None, real_value:dict=None,
 def plot_parameter_vs_fitness(df_samples:pd.DataFrame, df_output:pd.DataFrame, parameter_name:str, qoi_name:str, samples_id=None, axis=None):
     """
     Plot the parameter values against the fitness values.
-    Parameters:
-    - df_samples: DataFrame containing the samples.
-    - df_output: DataFrame containing the output of the analysis.
-    - parameter_name: Name of the parameter to plot.
-    - qoi_name: Name of the QoI to plot against the parameter.
-    - axis: Matplotlib axis to plot on (optional).
+    
+    Args:
+        df_samples: DataFrame containing the samples.
+        df_output: DataFrame containing the output of the analysis.
+        parameter_name: Name of the parameter to plot.
+        qoi_name: Name of the QoI to plot against the parameter.
+        samples_id: List of sample IDs to highlight (optional).
+        axis: Matplotlib axis to plot on (optional).
+    
     Returns:
-    - Matplotlib figure and axis if axis is None, otherwise returns the axis.
+        Matplotlib figure and axis if axis is None, otherwise draw in the given axis.
     """
     # Sort the parameter values
     df_sorted_params = df_samples[df_samples['ParamName'] == parameter_name].sort_values(by='ParamValue').reset_index()
@@ -120,13 +127,80 @@ def plot_parameter_vs_fitness(df_samples:pd.DataFrame, df_output:pd.DataFrame, p
         ax.set_title(f"Parameter vs Objective: {parameter_name} vs {qoi_name}")
     else:
         ax = axis
-
-    ax.scatter(df_sorted_params['ParamValue'], df_sorted_fitness['ObjFunc'], marker='o', c='gray', zorder=1)
+ 
     if samples_id:
-        ax.scatter(df_sorted_params.loc[df_sorted_params['SampleID'].isin(samples_id)]['ParamValue'], 
-                   df_sorted_fitness.loc[df_sorted_fitness['SampleID'].isin(samples_id), 'ObjFunc'], c='red', label='Selected Samples', marker='x', zorder=2)
+        # Plot non-selected samples in gray
+        df_non_selected = df_sorted_params[~df_sorted_params['SampleID'].isin(samples_id)].copy()
+        # Merge with fitness values using SampleID
+        df_non_selected = df_non_selected.merge(df_sorted_fitness[['SampleID', 'ObjFunc']], on='SampleID', how='left')
+        # print(f"Non-selected samples with fitness:\n{df_non_selected.head()}")
+        ax.scatter(df_non_selected['ParamValue'], df_non_selected['ObjFunc'], marker='o', c='gray', zorder=1)
+        # Plot selected samples
+        df_selected = df_sorted_params[df_sorted_params['SampleID'].isin(samples_id)].copy()
+        # Merge with fitness values using SampleID
+        df_selected = df_selected.merge(df_sorted_fitness[['SampleID', 'ObjFunc']], on='SampleID', how='left')
+        sns.scatterplot(df_selected, x='ParamValue', y='ObjFunc', hue='SampleID', ax=ax, marker='X', zorder=2, palette="deep", s=100)
+        # ax.scatter(df_selected['ParamValue'], df_sorted_fitness.loc[df_sorted_fitness['SampleID'].isin(samples_id), 'ObjFunc'], c='red', label='Selected Samples', marker='x', zorder=2)
+    else:
+        # Plot all samples in gray
+        ax.scatter(df_sorted_params['ParamValue'], df_sorted_fitness['ObjFunc'], marker='o', c='gray', zorder=1)
+
     ax.set_xlabel(parameter_name)
     ax.set_ylabel(f"Fitness({qoi_name})")
+
+    if axis is None:
+        plt.tight_layout()
+        return fig, ax
+
+def plot_pareto_front(df_output:pd.DataFrame, qoi_name1:str, qoi_name2:str, samples_id=None, axis=None):
+    """
+    Plot the Pareto front of the fitness values.
+
+    Args:
+        df_output: DataFrame containing the output of the analysis.
+        qoi_name1: Name of the QoI to plot in x axis
+        qoi_name2: Name of the QoI to plot in y axis
+        samples_id: List of sample IDs to highlight (optional).
+        axis: Matplotlib axis to plot on (optional).
+
+    Returns:
+        Matplotlib figure and axis if axis is None, otherwise draw in the given axis.
+    """
+
+    # Plotting
+    if axis is None:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.set_title(f"Pareto Front: {qoi_name1} vs {qoi_name2}")
+    else:
+        ax = axis
+    
+    # Find the corresponding fitness values for the sorted SampleIDs
+    for sample_id in df_output['SampleID']:
+        df_output.loc[df_output['SampleID'] == sample_id, qoi_name1] = df_output.loc[df_output['SampleID'] == sample_id, 'ObjFunc'].values[0][qoi_name1]
+        df_output.loc[df_output['SampleID'] == sample_id, qoi_name2] = df_output.loc[df_output['SampleID'] == sample_id, 'ObjFunc'].values[0][qoi_name2]
+
+    # Plot non-selected samples in gray
+    df_dominated = df_output[~df_output['SampleID'].isin(samples_id)].copy()
+    df_nondominated = df_output[df_output['SampleID'].isin(samples_id)].copy()
+    sns.scatterplot(df_nondominated, x=qoi_name1, y=qoi_name2, hue='SampleID', ax=ax, marker='X', zorder=2, palette="deep", s=100)
+    sns.scatterplot(df_dominated, x=qoi_name1, y=qoi_name2, ax=ax, marker='o', zorder=1, color='gray', s=100, label='Dominated', legend=False)
+
+    # Plot the Reference Point (Ideal Point)
+    ax.axvline(x=1, color='red', linestyle='--', alpha=0.3)
+    ax.axhline(y=1, color='red', linestyle='--', alpha=0.3)
+    ax.scatter(1, 1, color='red', marker='*', s=200, label='Ideal Point', zorder=3)
+
+    # Combine all legend handles and labels
+    handles, labels = ax.get_legend_handles_labels()
+    # Modify labels to have cleaner names
+    new_labels = [f'Sample ID: {label}' if label not in ['Dominated', 'Ideal Point'] else label for label in labels]
+    nondominated_handles = [
+        ax.scatter([], [], marker='X', s=100, color='gray', edgecolors='gray', linewidth=0.2, label='Non-Dominated', zorder=2)
+    ]
+    ax.legend(nondominated_handles+handles, ['Non-Dominated'] + new_labels)
+
+    ax.set_xlabel(qoi_name1)
+    ax.set_ylabel(qoi_name2)
 
     if axis is None:
         plt.tight_layout()
@@ -135,30 +209,35 @@ def plot_parameter_vs_fitness(df_samples:pd.DataFrame, df_output:pd.DataFrame, p
 def plot_parameter_vs_fitness_db(db_file:str, parameter_name:str, qoi_name:str, axis=None):
     """
     Plot the parameter space against the fitness values from the database file.
-    Parameters:
-    - db_file: Path to the database file.
-    - parameter_name: Name of the parameter to plot.
-    - qoi_name: Name of the QoI to plot against the parameter.
-    - axis: Matplotlib axis to plot on (optional).
+    
+    Args:
+        db_file: Path to the database file.
+        parameter_name: Name of the parameter to plot.
+        qoi_name: Name of the QoI to plot against the parameter.
+        axis: Matplotlib axis to plot on (optional).
+    
     Returns:
-    - Matplotlib figure and axis if axis is None, otherwise returns the axis.
+        Matplotlib figure and axis if axis is None, otherwise draw in the given axis.
     """
     # Load the database structure
     df_metadata, df_param_space, df_qois, df_gp_models, df_samples, df_output = load_structure(db_file)
     return plot_parameter_vs_fitness(df_samples, df_output, parameter_name, qoi_name, axis)
 
-def plot_qoi_param(df_ObsData:pd.DataFrame, df_output:pd.DataFrame, samples_id:list, x_var: str, y_var:str, axis=None):
+def plot_qoi_param(df_ObsData:pd.DataFrame, df_output:pd.DataFrame, samples_id:list, x_var: str, y_var:str, axis=None, swarmplot=False):
     """
     Plot the QoI parameter space from the database file.
-    Parameters:
-    - df_ObsData: Observed QoI DataFrame.
-    - df_output: Output DataFrame.
-    - samples_id: List of Sample IDs to plot.
-    - x_var: Variable to plot on the x-axis.
-    - y_var: Variable to plot on the y-axis.
-    - axis: Matplotlib axis to plot on (optional).
+
+    Args:
+        df_ObsData: Observed QoI DataFrame.
+        df_output: Output DataFrame.
+        samples_id: List of Sample IDs to plot.
+        x_var: Variable to plot on the x-axis.
+        y_var: Variable to plot on the y-axis.
+        axis: Matplotlib axis to plot on (optional).
+        swarmplot: Whether to use swarmplot instead of scatterplot.
+    
     Returns:
-    - Matplotlib figure and axis if axis is None, otherwise returns the axis.
+        Matplotlib figure and axis if axis is None, otherwise draw in the given axis.
     """
     # Load the model results associated with the parameters
     selected_outputs = df_output[df_output['SampleID'].isin(samples_id)]
@@ -176,7 +255,7 @@ def plot_qoi_param(df_ObsData:pd.DataFrame, df_output:pd.DataFrame, samples_id:l
         sns.lineplot(df_ObsData, x=x_var, y=y_var, color='red', label='Observed QoI', linewidth=3, ax=ax)
     else:
         # sns.scatterplot(df_ObsData, x=x_var, y=y_var, color='red', label='Observed QoI', ax=ax)
-        ax.axhline(y=df_ObsData[y_var].dropna().values[0], color='red', label='Observed QoI', linestyle='--')
+        ax.axhline(y=df_ObsData[y_var].dropna().values[0], color='red', label='Observed QoI', linewidth=3)
 
     all_df_data = pd.DataFrame()
     # Plot each QoI against the model results associated with the dic_param
@@ -193,12 +272,14 @@ def plot_qoi_param(df_ObsData:pd.DataFrame, df_output:pd.DataFrame, samples_id:l
     # Add formatted SampleID for better legend display
     all_df_data['SampleID_formatted'] = all_df_data['SampleID'].apply(lambda x: f'SampleID: {x}')
     if not all_df_data.empty:
-        if all_df_data[y_var].nunique() > 1:  # Ensure there are multiple y values to plot
+        if df_ObsData[y_var].nunique() > 1:  # Ensure there are multiple y values to plot
             sns.lineplot(data=all_df_data, x=x_var, y=y_var, ax=ax,
                 hue='SampleID_formatted', units='replicateID', dashes=(4,2), estimator=None)
         else:
-            sns.scatterplot(data=all_df_data, x=x_var, y=y_var, ax=ax,
-                hue='SampleID_formatted', style='replicateID', s=50, alpha=0.5)
+            if not swarmplot:
+                sns.scatterplot(data=all_df_data, x=x_var, y=y_var, ax=ax, hue='SampleID_formatted', s=50)
+            else: 
+                sns.swarmplot(data=all_df_data, y=y_var, ax=ax, hue='SampleID_formatted')
 
     ax.set_xlabel(x_var)
     ax.set_ylabel(y_var)
@@ -211,14 +292,16 @@ def plot_qoi_param(df_ObsData:pd.DataFrame, df_output:pd.DataFrame, samples_id:l
 def plot_qoi_param_db(db_file:str, samples_id:list, x_var: str=None, y_var:str=None, axis=None):
     """
     Plot the QoI parameter space from the database file.
-    Parameters:
-    - db_file: Path to the database file.
-    - samples_id: List of Sample IDs to plot.
-    - x_var: Variable to plot on the x-axis (optional).
-    - y_var: Variable to plot on the y-axis (optional).
-    - axis: Matplotlib axis to plot on (optional).
+    
+    Args:
+        db_file: Path to the database file.
+        samples_id: List of Sample IDs to plot.
+        x_var: Variable to plot on the x-axis (optional).
+        y_var: Variable to plot on the y-axis (optional).
+        axis: Matplotlib axis to plot on (optional).
+    
     Returns:
-    - Matplotlib figure and axis if axis is None, otherwise returns the axis.
+        Matplotlib figure and axis if axis is None, otherwise draw in the given axis.
     """
     # Load the database structure
     df_metadata, df_param_space, df_qois, df_gp_models, df_samples, df_output = load_structure(db_file)

@@ -63,7 +63,7 @@ def plot_qoi_over_time(df_plot, selected_qoi, ax):
     if handles and labels:
         ax.legend(title="Sample Index")
 
-def plot_global_sa_results(global_SA_parameters, sa_method, qoi_time_values, sa_results, selected_qoi, selected_sm, ax):
+def plot_global_sa_results(global_SA_parameters, sa_method, qoi_time_values, sa_results, selected_qoi, selected_sm, ax, parameter_order=None):
     import pandas as pd
     import seaborn as sns
     # This is necessary because Sobol method does not return the names of the parameters
@@ -79,12 +79,13 @@ def plot_global_sa_results(global_SA_parameters, sa_method, qoi_time_values, sa_
     ])
     # print(plot_data)
     # Sort Parameters by the maximum Sensitivity Index in descending order
-    parameter_order = (
-        plot_data.groupby("Parameter")["Sensitivity Index"]
-        .max()
-        .sort_values(ascending=False)
-        .index
-    )
+    if parameter_order is None:
+        parameter_order = (
+            plot_data.groupby("Parameter")["Sensitivity Index"]
+            .max()
+            .sort_values(ascending=False)
+            .index
+        )
     custom_palette = sns.color_palette("tab20", len(plot_data["Parameter"].unique()))
     # If just one time point, use barplot, else use lineplot
     if len(sa_results[selected_qoi].keys()) == 1:

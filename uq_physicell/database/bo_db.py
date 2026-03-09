@@ -2,18 +2,38 @@ import sqlite3
 import pandas as pd
 import io
 import pickle
-import torch
-from botorch.models.model_list_gp_regression import ModelListGP
+import warnings
+from typing import Any, TYPE_CHECKING
+
+try:
+    import torch
+except ImportError:
+    torch = None
+    warnings.warn("PyTorch is not available. GP model serialization/deserialization will be disabled.")
+
+if TYPE_CHECKING:
+    from botorch.models.model_list_gp_regression import ModelListGP
+else:
+    ModelListGP = Any
 
 def create_structure(db_path:str):
     """
-    Create the Bayesian Optimization (BO) database structure with six tables:
-    1. Metadata: Stores information about the calibration (method, observed data path, .ini config path, and model structure name).
-    2. ParameterSpace: Stores the parameter space information (ParamName, Type, Lower_Bound, Upper_Bound, Regulates).
-    3. QoIs: Stores the quantities of interest (QoI_Name, QoI_Function, ObsData_Column, QoI_distanceFunction, QoI_distanceWeight).
-    4. GP_Models: Stores the Gaussian Process models (IterationID, GP_Model, Hypervolume).
-    5. Samples: Stores the samples (IterationID, SampleID, ParamName, ParamValue).
-    6. Output: Stores the output of the simulations (SampleID, Objective_Function, Noise_Std, and Data).
+    Create the SQLite database structure for storing Bayesian Optimization (BO) calibration data. This function initializes the database with the necessary tables to store metadata, parameter space definitions, quantities of interest (QoIs), Gaussian Process models, samples, and simulation output.
+    
+    Args:
+        db_path (str): Path to the SQLite database file.
+    
+    Tables Created:
+        - Metadata: Stores information about the calibration (method, observed data path, .ini config path, and model structure name).
+        - ParameterSpace: Stores the parameter space information (ParamName, Type, Lower_Bound, Upper_Bound, Regulates).
+        - QoIs: Stores the quantities of interest (QoI_Name, QoI_Function, ObsData_Column, QoI_distanceFunction, QoI_distanceWeight).
+        - GP_Models: Stores the Gaussian Process models (IterationID, GP_Model, Hypervolume).
+        - Samples: Stores the samples (IterationID, SampleID, ParamName, ParamValue).
+        - Output: Stores the output of the simulations (SampleID, Objective_Function, Noise_Std, and Data).
+    
+    Example:
+        >>> create_structure('calibration.db')
+        # Database created with the necessary tables for BO calibration.
     """
     try:
         # Connect to the database (create it if it doesn't exist)
@@ -81,9 +101,20 @@ def create_structure(db_path:str):
 def insert_metadata(db_path:str, metadata:dict):
     """
     Insert BO metadata information into the Metadata table.
-    Parameters:
-    - db_path: Path to the database file.
-    - metadata: Dictionary containing BO metadata information.
+
+    Args:
+        db_path (str): Path to the database file.
+        metadata (dict): Dictionary containing BO metadata information.
+    
+    Example:
+        >>> metadata = {
+        ...     'BO_Method': 'Bayesian Optimization',
+        ...     'ObsData_Path': 'observed_data.csv',
+        ...     'Ini_File_Path': 'config.ini',
+        ...     'StructureName': 'PhysiCell'
+        ... }
+        >>> insert_metadata('calibration.db', metadata)
+        # Metadata inserted into the database.
     """
     try:
         conn = sqlite3.connect(db_path, timeout=30.0)
@@ -103,9 +134,18 @@ def insert_metadata(db_path:str, metadata:dict):
 def insert_param_space(db_path:str, param_space:dict):
     """
     Insert BO parameter space information into the ParameterSpace table.
-    Parameters:
-    - db_path: Path to the database file.
-    - param_space: Dictionary containing parameter space information.
+    
+    Args:
+        db_path (str): Path to the database file.
+        param_space (dict): Dictionary containing parameter space information.
+
+    Example:
+        >>> param_space = {
+        ...     'param1': {'type': 'real', 'lower_bound': 0.0, 'upper_bound': 1.0},
+        ...     'param2': {'type': 'real', 'lower_bound': 1.0, 'upper_bound': 5.0}
+        ... }
+        >>> insert_param_space('calibration.db', param_space)
+        # Parameter space information inserted into the database.
     """
     try:
         conn = sqlite3.connect(db_path)
@@ -126,9 +166,18 @@ def insert_param_space(db_path:str, param_space:dict):
 def insert_qois(db_path:str, qois:dict):
     """
     Insert QoIs into the QoIs table.
-    Parameters:
-    - db_path: Path to the database file.
-    - qois: Dictionary of QoIs (keys as names, values as lambda functions or strings).
+
+    Args:
+        db_path (str): Path to the database file.
+        qois (dict): Dictionary of QoIs (keys as names, values as lambda functions or strings).
+    
+    Example:
+        >>> qois = {
+        ...     'total_cells': "lambda data: data['cell_count'].sum()",
+        ...     'max_radius': "lambda data: data['radius'].max()"
+        ... }
+        >>> insert_qois('calibration.db', qois)
+        # QoIs inserted into the database.
     """
     try:
         conn = sqlite3.connect(db_path)
@@ -149,13 +198,27 @@ def insert_qois(db_path:str, qois:dict):
 def insert_gp_models(db_path:str, iteration_id:int, gp_model:ModelListGP, hypervolume:float):
     """
     Insert Gaussian Process model into the GP_Models table.
-    Parameters:
-    - db_path: Path to the database file.
-    - iteration_id: The iteration ID for the GP model.
-    - gp_model: The Gaussian Process model to be stored.
-    - hypervolume: The hypervolume value for this iteration.
+    
+    Args:
+        db_path (str): Path to the database file.
+        iteration_id (int): The iteration ID for the GP model.
+        gp_model (ModelListGP): The Gaussian Process model to be stored.
+        hypervolume (float): The hypervolume value for this iteration.
+
+    Example:
+        >>> from botorch.models import SingleTaskGP
+        >>> from botorch.models.model_list_gp_regression import ModelListGP
+        >>> import torch
+        >>> # Create a simple GP model for demonstration
+        >>> X = torch.rand(10, 1)
+        >>> Y = torch.sin(X * 2 * torch.pi) + 0.1 * torch.randn_like(X)
+        >>> gp = SingleTaskGP(X, Y)
+        >>> model_list = ModelListGP(gp)
+        >>> insert_gp_models('calibration.db', iteration_id=0, gp_model=model_list, hypervolume=0.5)
     """
     try:
+        if torch is None:
+            raise RuntimeError("PyTorch is not available. Cannot serialize GP models.")
         # Serialize the GP model into a binary object
         buffer = io.BytesIO()
         torch.save(gp_model.state_dict(), buffer, _use_new_zipfile_serialization=False)
@@ -175,10 +238,18 @@ def insert_gp_models(db_path:str, iteration_id:int, gp_model:ModelListGP, hyperv
 def insert_samples(db_path:str, iteration_id:int, samples:dict):
     """
     Insert samples into the Samples table.
-    Parameters:
-    - db_path: Path to the database file.
-    - iteration_id: The iteration ID for the samples.
-    - samples: Dictionary of samples (keys as SampleID, values as dictionaries of ParamName and ParamValue).
+    
+    Args:
+        db_path (str): Path to the database file.
+        iteration_id (int): The iteration ID for the samples.
+        samples (dict): Dictionary of samples (keys as SampleID, values as dictionaries of ParamName and ParamValue).
+    
+    Example:
+        >>> samples = {
+        ...     1: {'param1': 0.5, 'param2': 1.0},
+        ...     2: {'param1': 0.3, 'param2': 1.2}
+        ... }
+        >>> insert_samples('calibration.db', iteration_id=0, samples=samples)
     """
     try:
         conn = sqlite3.connect(db_path, timeout=30.0)
@@ -197,12 +268,16 @@ def insert_samples(db_path:str, iteration_id:int, samples:dict):
 def insert_output(db_path:str, sample_id:int, obj_func:bytes, noise_std:bytes, data:bytes):
     """
     Insert simulation results into the Output table.
-    Parameters:
-    - db_path: Path to the database file.
-    - sample_id: The sample ID.
-    - obj_func: The objective function values (as binary).
-    - noise_std: The noise standard deviation values (as binary).
-    - data: The simulation results data (as binary).
+    
+    Args:
+        db_path (str): Path to the database file.
+        sample_id (int): The sample ID.
+        obj_func (bytes): The objective function values (as binary).
+        noise_std (bytes): The noise standard deviation values (as binary).
+        data (bytes): The simulation results data (as binary).
+    
+    Example:
+        >>> insert_output('calibration.db', sample_id=1, obj_func=b'...', noise_std=b'...', data=b'...')
     """
     try:
         conn = sqlite3.connect(db_path)
@@ -332,6 +407,8 @@ def load_gp_models(db_file: str) -> pd.DataFrame:
     conn = sqlite3.connect(db_file)
     cursor = conn.cursor()
     try:
+        if torch is None:
+            raise RuntimeError("PyTorch is not available. Cannot deserialize GP models.")
         cursor.execute('SELECT * FROM GP_Models')
         gp_models = cursor.fetchall()
         df_gp_models = pd.DataFrame(gp_models, columns=['IterationID', 'GP_Model', 'Hypervolume'])
@@ -438,12 +515,12 @@ def load_structure(db_file: str, load_data: bool = True) -> tuple:
     
     This is a convenience wrapper that loads all tables from the database.
     For more control over what data is loaded, use the individual load functions:
-    - load_metadata(db_file)
-    - load_parameter_space(db_file)
-    - load_qois(db_file)
-    - load_gp_models(db_file)
-    - load_samples(db_file, iteration_ids=None)
-    - load_output(db_file, sample_ids=None, load_data=True)
+        - load_metadata(db_file)
+        - load_parameter_space(db_file)
+        - load_qois(db_file)
+        - load_gp_models(db_file)
+        - load_samples(db_file, iteration_ids=None)
+        - load_output(db_file, sample_ids=None, load_data=True)
     
     Args:
         db_file (str): Path to the SQLite database file.

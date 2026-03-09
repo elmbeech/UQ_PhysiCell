@@ -7,6 +7,36 @@ import configparser
 
 from .load_files import load_xml_file, load_csv_file, update_rules_file, load_ini_file
 
+
+def _set_executable_path_from_dialog(main_window):
+    selected_path, _ = QFileDialog.getOpenFileName(
+        main_window,
+        "Select Executable",
+        "",
+        "Executable Files (*)"
+    )
+    if not selected_path:
+        return
+    main_window.executable_path_input.setText(os.path.relpath(selected_path, os.getcwd()))
+
+
+class PreviewTableWidget(QTableWidget):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._header_initialized = False
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._header_initialized:
+            return
+
+        header = self.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Stretch)
+        header.resizeSections(QHeaderView.Stretch)
+        for col in range(self.columnCount()):
+            header.setSectionResizeMode(col, QHeaderView.Interactive)
+        self._header_initialized = True
+
 def create_tab1(main_window):
     # Add the following methods to the main_window instance
     main_window.load_xml_file = load_xml_file
@@ -158,13 +188,13 @@ def create_tab1(main_window):
     main_window.ini_preview_label = QLabel("<b> Preview Table</b>")
     main_window.ini_preview_label.setAlignment(Qt.AlignCenter)
     layout_tab1.addWidget(main_window.ini_preview_label)
-    main_window.preview_table = QTableWidget()
+    main_window.preview_table = PreviewTableWidget()
     main_window.preview_table.setColumnCount(4)
     main_window.preview_table.setHorizontalHeaderLabels(["Parameter Path", "Value", "Name", "Place"])
     main_window.preview_table.setEditTriggers(QTableWidget.NoEditTriggers)  # Make table non-editable
     header = main_window.preview_table.horizontalHeader()
     for col in range(main_window.preview_table.columnCount()):
-        header.setSectionResizeMode(col, QHeaderView.Stretch)
+        header.setSectionResizeMode(col, QHeaderView.Interactive)
     # Set gray background for header
     header = main_window.preview_table.horizontalHeader()
     header.setStyleSheet("QHeaderView::section { background-color: lightgray; color: black; font-weight: bold; }")
@@ -201,7 +231,7 @@ def create_tab1(main_window):
     main_window.executable_path_input.setPlaceholderText("Enter executable path")
     main_window.executable_path_browse_button = QPushButton("Select")
     main_window.executable_path_browse_button.setStyleSheet("background-color: lightgreen; color: black")
-    main_window.executable_path_browse_button.clicked.connect(lambda: main_window.executable_path_input.setText( os.path.relpath(QFileDialog.getOpenFileName(main_window, "Select Executable", "", "Executable Files (*)")[0], os.getcwd()) ))
+    main_window.executable_path_browse_button.clicked.connect(lambda: _set_executable_path_from_dialog(main_window))
     main_window.executable_path_input.setPlaceholderText("Enter executable path")
     main_window.save_hbox.addWidget(main_window.executable_path_input)
     main_window.save_hbox.addWidget(main_window.executable_path_browse_button)
@@ -803,6 +833,9 @@ def save_ini_file(main_window):
     # Save the parameters to a .ini file
     options = QFileDialog.Options()
     file_path, _ = QFileDialog.getSaveFileName(main_window, "Save .ini File", "", "INI Files (*.ini);;All Files (*)", options=options)
+    if not file_path:
+        return
+
     file_path = os.path.relpath(file_path, os.getcwd())  # Convert to relative path
     if file_path:
         try:

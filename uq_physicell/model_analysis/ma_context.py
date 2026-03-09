@@ -23,9 +23,9 @@ except ImportError:
 
 # My local modules
 from uq_physicell import PhysiCell_Model
-from .samplers import run_local_sampler, run_global_sampler, run_local_sampler
+from .samplers import run_local_sampler, run_global_sampler
 from ..utils.model_wrapper import run_replicate, run_replicate_serializable
-from ..database.ma_db import create_structure, insert_metadata, insert_param_space, insert_qois, insert_samples, insert_output, check_simulations_db, disable_wal_mode
+from ..database.ma_db import create_structure, insert_metadata, insert_param_space, insert_qois, insert_samples, insert_output, check_simulations_db, _disable_wal_mode
 
 
 class ModelAnalysisContext:
@@ -51,15 +51,6 @@ class ModelAnalysisContext:
             execution. Defaults to 1.
         summary_function (callable, optional): Custom function for summarizing
             simulation output. Defaults to None.
-    
-    Attributes:
-        db_path (str): Database file path.
-        params_dict (dict): Parameter configuration dictionary.
-        parallel_method (str): Selected parallelization method.
-        qois_dict (dict): Quantities of Interest configuration.
-        num_workers (int): Number of parallel workers.
-        summary_function (callable): Summary function for output processing.
-        dic_metadata (dict): Metadata for database storage.
     
     Raises:
         ImportError: If required parallelization libraries are not available.
@@ -427,7 +418,7 @@ def run_simulations(context: ModelAnalysisContext):
     if rank == 0:
         print(f"Simulations completed and results stored in the database: {context.db_path}.")
         # Disable WAL mode of the database to allow reading results without locks
-        disable_wal_mode(context.db_path)
+        _disable_wal_mode(context.db_path)
             
 if __name__ == "__main__":
     pass

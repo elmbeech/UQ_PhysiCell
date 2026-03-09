@@ -1,8 +1,9 @@
 # Model Calibration
 
-This section covers the methods of calibration available in UQ-PhysiCell: [Bayesian Optimization](#bayesian-optimization) and [Approximate Bayes Computation](#approximate-bayesian-computation-abc). Note that this package allow another forms of calibration via API, including optimization algorithms like least-squares, Nelder-Mead, genetic algorithm, MCMC, amoung others.
+This section covers the methods of calibration available in UQ-PhysiCell: {ref}`Bayesian Optimization <bayesian-optimization>` and {ref}`Approximate Bayesian Computation (ABC) <approximate-bayesian-computation-abc>`. Note that this package allow another forms of calibration via API, including optimization algorithms like least-squares, Nelder-Mead, genetic algorithm, MCMC, amoung others.
 
 
+(bayesian-optimization)=
 ## Bayesian Optimization
 
 This module provides a comprehensive Bayesian optimization framework for calibrating PhysiCell models using multi-objective optimization to learn the Pareto front (more details in [BoTorch](https://botorch.org/docs/multi_objective/)). The framework is designed to efficiently find optimal parameter configurations that minimize the discrepancy between model predictions and observed experimental data.
@@ -66,6 +67,7 @@ Both transformations ensure:
 
 The exponential transformation provides steeper gradients for small distances, which can be beneficial when fine-tuning parameters near optimal values. Enable exponential transformation by setting `use_exponential_fitness: True` in the `bo_options`.
 
+(approximate-bayesian-computation-abc)=
 ## Approximate Bayesian Computation (ABC)
 
 This module helps to solve the problem of parameter inference using a Sequential Monte Carlo scheme (more details in [pyabc documentation](https://pyabc.readthedocs.io/en/latest/what.html)). The ABC-SMC creates a sequence of intermediate posterior distributions that gradually approach the true, intractable posterior distribution. The ABC posterior in iteration $t$ is:

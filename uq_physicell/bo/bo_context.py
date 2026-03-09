@@ -7,24 +7,39 @@ import pickle
 import numpy as np
 import pandas as pd
 from scipy.spatial.distance import pdist
-import torch
-from typing import Union, Optional
+from typing import Union, Optional, Any, TYPE_CHECKING
+import warnings
 
 # BoTorch imports
-from botorch.optim.optimize import optimize_acqf
-from botorch.utils.sampling import draw_sobol_samples
-from botorch import fit_gpytorch_mll
-from botorch.utils.multi_objective.pareto import is_non_dominated
-from botorch.acquisition.multi_objective.logei import qLogNoisyExpectedHypervolumeImprovement
-from botorch.acquisition.logei import qLogExpectedImprovement
-from botorch.models.gp_regression import SingleTaskGP
-from botorch.models.model_list_gp_regression import ModelListGP
-from botorch.models.multitask import MultiTaskGP
-from botorch.sampling.normal import SobolQMCNormalSampler
+try:
+    import torch
+    from botorch.optim.optimize import optimize_acqf
+    from botorch.utils.sampling import draw_sobol_samples
+    from botorch import fit_gpytorch_mll
+    from botorch.utils.multi_objective.pareto import is_non_dominated
+    from botorch.acquisition.multi_objective.logei import qLogNoisyExpectedHypervolumeImprovement
+    from botorch.acquisition.logei import qLogExpectedImprovement
+    from botorch.models.gp_regression import SingleTaskGP
+    from botorch.models.model_list_gp_regression import ModelListGP
+    from botorch.models.multitask import MultiTaskGP
+    from botorch.sampling.normal import SobolQMCNormalSampler
+except ImportError:
+    torch = None
+    warnings.warn("PyTorch is not available. GP modeling and Bayesian optimization functionalities will be disabled. Please install PyTorch to use these features.")
+
+if TYPE_CHECKING:
+    from torch import Tensor as torch_Tensor
+else:
+    torch_Tensor = Any
 
 # GPyTorch imports
-from gpytorch.mlls.sum_marginal_log_likelihood import SumMarginalLogLikelihood
-from gpytorch.mlls import ExactMarginalLogLikelihood
+try:
+    import gpytorch
+    from gpytorch.mlls.sum_marginal_log_likelihood import SumMarginalLogLikelihood
+    from gpytorch.mlls import ExactMarginalLogLikelihood
+except ImportError:
+    gpytorch = None
+    warnings.warn("GPyTorch is not available. GP modeling functionalities will be disabled. Please install GPyTorch to use these features.")
 
 # Local module imports
 from uq_physicell import PhysiCell_Model
@@ -46,7 +61,7 @@ class CalibrationContext:
     """
     Context for Bayesian Optimization calibration for single objective or multi-objective.
     
-    Attributes:
+    Args:
         db_path (str): Path to the database file for storing and retrieving samples.
         obsData (str or dict): Path or dict containing the observed data.
         obsData_columns (dict): Dictionary mapping QoI names to their corresponding columns in the observed data.
@@ -55,9 +70,8 @@ class CalibrationContext:
         distance_functions (dict): Dictionary of functions to compute distances between model outputs and observed data.
         search_space (dict): Dictionary defining the search space for parameters, including bounds and types.
         bo_options (dict): Options for Bayesian Optimization including sampling parameters.
-                          - 'use_correlated_gp' (bool): If True, use MultiTaskGP to model correlations between 
-                                                        objectives. If False (default), use independent GPs per objective.
-                          - Other options: num_initial_samples, num_iterations, batch_size_per_iteration, etc.
+                            - 'use_correlated_gp' (bool): If True, use MultiTaskGP to model correlations between objectives. If False (default), use independent GPs per objective.
+                            - Other options: num_initial_samples, num_iterations, batch_size_per_iteration, etc.
         logger (logging.Logger): Logger instance for logging messages during the calibration process.
     """
     
@@ -74,6 +88,8 @@ class CalibrationContext:
         logger: logging.Logger=None
     ):
         """Initialize CalibrationContext with comprehensive validation and setup."""
+        if torch is None or gpytorch is None:
+            raise ImportError("PyTorch and GPyTorch are required for CalibrationContext. Please install these libraries to use this functionality.")
         # Core configuration
         self.db_path = db_path
         self.model_config = model_config
@@ -580,8 +596,8 @@ class CalibrationContext:
         self.batch_size_bo += additional_iterations
         self.logger.debug(f"Updated max iterations from {original_iterations} to {self.batch_size_bo} (added {additional_iterations} iterations)")
 
-    def analyze_convergence(self, hvs_list: list, train_obj: torch.Tensor, train_obj_std: torch.Tensor, 
-                           train_x: torch.Tensor, iteration: int) -> dict:
+    def analyze_convergence(self, hvs_list: list, train_obj: torch_Tensor, train_obj_std: torch_Tensor, 
+                           train_x: torch_Tensor, iteration: int) -> dict:
         """
         Noise-aware convergence analysis that distinguishes between:
         1. True convergence (optimization found optimal solutions)
@@ -592,9 +608,9 @@ class CalibrationContext:
         
         Args:
             hvs_list (list): History of hypervolume values
-            train_obj (torch.Tensor): Objective values (used for Pareto analysis)
-            train_obj_std (torch.Tensor): Standard deviation across replicates (noise estimate)
-            train_x (torch.Tensor): Parameter values (normalized)
+            train_obj (torch_Tensor): Objective values (used for Pareto analysis)
+            train_obj_std (torch_Tensor): Standard deviation across replicates (noise estimate)
+            train_x (torch_Tensor): Parameter values (normalized)
             iteration (int): Current iteration
             
         Returns:
@@ -860,7 +876,7 @@ class CalibrationContext:
         Analyze parameter space coverage.
         
         Args:
-            train_x (torch.Tensor): Normalized parameter values with shape (n_samples, n_params)
+            train_x (torch_Tensor): Normalized parameter values with shape (n_samples, n_params)
             
         Returns:
             dict: Dictionary containing coverage analysis
@@ -944,7 +960,7 @@ class CalibrationContext:
         Estimate diversity of acquisition function sampling.
         
         Args:
-            train_x (torch.Tensor): Normalized parameter values with shape (n_samples, n_params)
+            train_x (torch_Tensor): Normalized parameter values with shape (n_samples, n_params)
             
         Returns:
             float: Diversity metric (higher is more diverse)
@@ -1216,7 +1232,7 @@ def run_bayesian_optimization(calib_context: CalibrationContext, additional_iter
         raise
 
 
-def _fit_gp_models(train_x: torch.Tensor, train_obj: torch.Tensor, train_obj_std: torch.Tensor, calib_context: CalibrationContext):
+def _fit_gp_models(train_x: torch_Tensor, train_obj: torch_Tensor, train_obj_std: torch_Tensor, calib_context: CalibrationContext):
     """
     Fit Gaussian Process models for multi-objective optimization.
     
@@ -1225,9 +1241,9 @@ def _fit_gp_models(train_x: torch.Tensor, train_obj: torch.Tensor, train_obj_std
     2. Multivariate GP (MultiTaskGP): Single GP that models correlations between objectives
     
     Args:
-        train_x (torch.Tensor): Training inputs (normalized parameters) - should be in [0, 1]^d
-        train_obj (torch.Tensor): Training objectives (fitness values)
-        train_obj_std (torch.Tensor): Noise standard deviations
+        train_x (torch_Tensor): Training inputs (normalized parameters) - should be in [0, 1]^d
+        train_obj (torch_Tensor): Training objectives (fitness values)
+        train_obj_std (torch_Tensor): Noise standard deviations
         calib_context (CalibrationContext): Calibration context
         
     Returns:
@@ -1325,7 +1341,7 @@ def _fit_gp_models(train_x: torch.Tensor, train_obj: torch.Tensor, train_obj_std
         return model_list
 
 
-def _optimize_acquisition_function(model, train_x: torch.Tensor, calib_context: CalibrationContext) -> torch.Tensor:
+def _optimize_acquisition_function(model, train_x: torch_Tensor, calib_context: CalibrationContext) -> torch_Tensor:
     """
     Optimize the acquisition function to find next candidate points.
     
@@ -1333,11 +1349,11 @@ def _optimize_acquisition_function(model, train_x: torch.Tensor, calib_context: 
     
     Args:
         model: Fitted GP model (ModelListGP or MultiTaskGP)
-        train_x (torch.Tensor): Current training inputs
+        train_x (torch_Tensor): Current training inputs
         calib_context (CalibrationContext): Calibration context
         
     Returns:
-        torch.Tensor: Next candidate points to evaluate
+        torch_Tensor: Next candidate points to evaluate
     """
     # Set up bounds for optimization (normalized space [0, 1]^d)
     num_params = len(calib_context.search_space)
