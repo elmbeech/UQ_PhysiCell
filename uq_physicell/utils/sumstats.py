@@ -9,15 +9,15 @@ def summ_func_FinalPopLiveDead(outputPath:str,summaryFile:Union[str,None], dic_p
     """
     Final population of live and dead cells
     
-    Parameters:
-    - outputPath: str -> Path to the PhysiCell output directory.
-    - summaryFile: Union[str, None] -> File to store the summary (optional).
-    - dic_params: dict -> Dictionary of simulation parameters.
-    - SampleID: int -> Unique identifier for the sample.
-    - ReplicateID: int -> Unique identifier for the replicate.
+    Args:
+        outputPath: str -> Path to the PhysiCell output directory.
+        summaryFile: Union[str, None] -> File to store the summary (optional).
+        dic_params: dict -> Dictionary of simulation parameters.
+        SampleID: int -> Unique identifier for the sample.
+        ReplicateID: int -> Unique identifier for the replicate.
     
     Returns:
-    - pd.DataFrame or None -> DataFrame with the computed QoIs or None if saved to a file.
+        pd.DataFrame or None -> DataFrame with the computed QoIs or None if saved to a file.
     """
     # read the last file
     mcds = pcdl.TimeStep('final.xml',outputPath, microenv=False, graph=False, settingxml=None, verbose=False)
@@ -42,15 +42,15 @@ def summ_func_TimeSeriesPopLiveDead(outputPath:str,summaryFile:Union[str,None], 
     """
     Population over time of live and dead cells
 
-    Parameters:
-    - outputPath: str -> Path to the PhysiCell output directory.
-    - summaryFile: Union[str, None] -> File to store the summary (optional).
-    - dic_params: dict -> Dictionary of simulation parameters.
-    - SampleID: int -> Unique identifier for the sample.
-    - ReplicateID: int -> Unique identifier for the replicate.
+    Args:
+        outputPath: str -> Path to the PhysiCell output directory.
+        summaryFile: Union[str, None] -> File to store the summary (optional).
+        dic_params: dict -> Dictionary of simulation parameters.
+        SampleID: int -> Unique identifier for the sample.
+        ReplicateID: int -> Unique identifier for the replicate.
     
     Returns:
-    - pd.DataFrame or None -> DataFrame with the computed QoIs or None if saved to a file.
+        pd.DataFrame or None -> DataFrame with the computed QoIs or None if saved to a file.
     """
 
     mcds_ts = pcdl.TimeSeries(outputPath, microenv=False, graph=False, settingxml=None, verbose=False)
@@ -69,15 +69,15 @@ def summ_func_TimeSeriesPopLiveDead(outputPath:str,summaryFile:Union[str,None], 
         return None
     else: return df
 
-def check_functions_need_microenv(qoi_funcs):
+def _check_functions_need_microenv(qoi_funcs:dict) -> bool:
     """
     Check if any of the QoI functions require microenvironment data (df_subs).
     
-    Parameters:
-    - qoi_funcs: dict -> Dictionary of QoI functions
+    Args:
+        qoi_funcs: dict -> Dictionary of QoI functions
     
     Returns:
-    - bool: True if any function needs microenvironment data
+        bool: True if any function needs microenvironment data
     """
     # If no functions provided, return True (default to loading microenvironment)
     if not qoi_funcs:
@@ -92,17 +92,17 @@ def check_functions_need_microenv(qoi_funcs):
     # If none need it,
     return False
 
-def safe_call_qoi_function(func, mcds=None, list_mcds=None ):
+def safe_call_qoi_function(func: callable, mcds:Union[pcdl.TimeStep,None]=None, list_mcds:Union[list,None]=None ):
     """
     Safely call a QoI function with the appropriate dataframe based on parameter inspection.
     
-    Parameters:
-    - func: The QoI function to call
-    - mcds: pcdl.TimeStep or None -> The mcds object for single snapshot
-    - list_mcds: pcdl.TimeSeries or None -> The mcds time series object for multiple snapshots
+    Args:
+        func: The QoI function to call
+        mcds: pcdl.TimeStep or None -> The mcds object for single snapshot
+        list_mcds: pcdl.TimeSeries or None -> The mcds time series object for multiple snapshots
     
     Returns:
-    - Result of the QoI function
+        Result of the QoI function
     """
     # Check if function has our custom parameter name attribute (from string creation)
     param_name = func.__param_name__
@@ -119,14 +119,16 @@ def safe_call_qoi_function(func, mcds=None, list_mcds=None ):
     else:
         raise ValueError(f"Unknown parameter name '{param_name}' for QoI function.")
     
-def create_named_function_from_string(func_str: str, qoi_name: str) -> callable:
+def _create_named_function_from_string(func_str: str, qoi_name: str) -> callable:
     """
     Dynamically creates a named function from a string.
-    Parameters:
-    - func_str: The string representation of the function.
-    - qoi_name: The name of the function to be created.
-    Return:
-    - The created function with preserved parameter inspection capability.
+    
+    Args:
+        func_str: The string representation of the function.
+        qoi_name: The name of the function to be created.
+    
+    Returns:
+        The created function with preserved parameter inspection capability.
     """
     # Extract arg name from lambda (e.g., "lambda df_subs:" -> "df_subs")
     arg_match = re.search(r'lambda\s+(\w+):', func_str)
@@ -157,58 +159,79 @@ def create_named_function_from_string(func_str: str, qoi_name: str) -> callable:
 def recreate_qoi_functions(qoi_functions: dict) -> dict:
     """
     Recreate QoI functions from their string representations.
-    Parameters:
-    - qoi_functions: Dictionary of QoI functions (keys as names, values as strings)
-    Return:
-    - Dictionary of recreated QoI functions (keys as names, values as callables)
+    
+    Args:
+        qoi_functions: Dictionary of QoI functions (keys as names, values as strings).
+            Pass a mapping like the following:
+                qoi_functions = {
+                    "mean_substrate": "lambda df_subs: df_subs['substrate'].mean()",
+                    "live_cell_count": "lambda df_cell: len(df_cell[df_cell['dead'] == False])",
+                    "max_volume": "lambda df: df['total_volume'].max()",
+                    "mean_radial_distance": "lambda df: df[['position_x', 'position_y', 'position_z']].apply(lambda row: ((row['position_x']**2 + row['position_y']**2 + row['position_z']**2)**0.5), axis=1).mean()"
+                }
+    
+    Returns:
+        Dictionary of recreated QoI functions (keys as names, values as callables)
     """
     recreated_qoi_funcs = {}
     for qoi_name, qoi_value in qoi_functions.items():
         try:
-            recreated_qoi_funcs[qoi_name] = create_named_function_from_string(qoi_value, qoi_name)
+            recreated_qoi_funcs[qoi_name] = _create_named_function_from_string(qoi_value, qoi_name)
         except Exception as e:
             raise ValueError(f"Error recreating QoI function '{qoi_name}': {e}")
     return recreated_qoi_funcs
     
-def summary_function(outputPath:str, summaryFile:Union[str, None], dic_params:dict, SampleID:int, ReplicateID:int, qoi_functions:dict,  mode:str='time_series', RemoveFolder:bool=True, drop_columns:Union[list, None]=None,) -> Union[pd.DataFrame, None]:
+def summary_function(outputPath:str, summaryFile:Union[str, None], dic_params:dict, SampleID:int, ReplicateID:int, qoi_functions:dict, RemoveFolder:bool=True, drop_columns:Union[list, None]=None,) -> Union[pd.DataFrame, None]:
     """
     Generic summary function for creating custom QoIs (Quantities of Interest) based on df_cell elements.
 
-    Parameters:
-    - outputPath: str -> Path to the PhysiCell output directory.
-    - summaryFile: Union[str, None] -> File to store the summary (optional).
-    - dic_params: dict -> Dictionary of simulation parameters.
-    - SampleID: int -> Unique identifier for the sample.
-    - ReplicateID: int -> Unique identifier for the replicate.
-    - qoi_functions: dict -> Dictionary of QoI functions with keys as QoI names and values as functions/lambdas.
-    - mode: str -> Mode of operation: 'last_snapshot', 'time_series', or 'summary'.
-    - RemoveFolder: bool -> Whether to remove the output folder after processing.
-    - drop_columns: list -> List of columns to drop from the DataFrame.
+    Args:
+        outputPath: str -> Path to the PhysiCell output directory.
+        summaryFile: Union[str, None] -> File to store the summary (optional).
+        dic_params: dict -> Dictionary of simulation parameters.
+        SampleID: int -> Unique identifier for the sample.
+        ReplicateID: int -> Unique identifier for the replicate.
+        qoi_functions: dict -> Dictionary of QoI functions with keys as QoI names and values as functions/lambdas.
+        RemoveFolder: bool -> Whether to remove the output folder after processing.
+        drop_columns: list -> List of columns to drop from the DataFrame.
 
     Returns:
-    - pd.DataFrame or None -> DataFrame with the computed QoIs or None if saved to a file.
+        pd.DataFrame or None -> DataFrame with the computed QoIs or None if saved to a file.
     """
     try:
-        if mode == 'last_snapshot':
-            # Check if any function needs microenvironment data
-            needs_microenv = check_functions_need_microenv(qoi_functions)
-            
-            # Load the last snapshot
-            mcds = pcdl.TimeStep('final.xml', outputPath, microenv=needs_microenv, graph=False, settingxml=None, verbose=False)
-            if qoi_functions is None:
-                # Optional: Remove replicate output folder
-                if (RemoveFolder): rmtree(outputPath)
-                # Entire mcds is returned if drop_columns is empty
-                if not drop_columns:
-                    return [mcds]
-                else:
-                    df_cell = mcds.get_cell_df()  # Ensure df_cell is initialized
-                    df_cell.drop(columns=drop_columns, inplace=True, errors='ignore')
-                return [df_cell]
-                    
+        # Check if any function needs microenvironment data
+        needs_microenv = _check_functions_need_microenv(qoi_functions)
+        # Load the time series
+        mcds_ts = pcdl.TimeSeries(outputPath, microenv=needs_microenv, graph=False, settingxml=None, verbose=False)
+        list_mcds=mcds_ts.get_mcds_list()
+        #  All data is stored as a list of mcds
+        if qoi_functions is None:
+            # Optional: Remove replicate output folder
+            if (RemoveFolder): rmtree(outputPath)
+            # Entire list of mcds is returned if drop_columns is empty
+            if not drop_columns:
+                return list_mcds
             else:
-                # Compute QoIs using safe function calling
-                qoi_data = {name: safe_call_qoi_function(func, mcds=mcds) for name, func in qoi_functions.items()}
+                df_list = []
+                for mcds in list_mcds:
+                    df_cell = mcds.get_cell_df()
+                    df_cell.drop(columns=drop_columns, inplace=True, errors='ignore')
+                    df_list.append(df_cell)
+                return df_list
+        else:
+            df_list = []
+            for mcds in list_mcds:
+                try:
+                    qoi_data = {}
+                    for name, func in qoi_functions.items():
+                        func_result = safe_call_qoi_function(func, mcds=mcds, list_mcds=list_mcds)
+                        if func_result is not None:
+                            qoi_data[name] = func_result
+                    if not qoi_data: continue  # Skip if no QoI data was computed
+                    # print(f"Computed QoIs at time {mcds.get_time()}: {qoi_data}")
+                except Exception as e:
+                    raise RuntimeError(f"Error computing QoIs in summary_function: {e}")
+                
                 data = {
                     'time': mcds.get_time(),
                     'sampleID': SampleID,
@@ -216,74 +239,8 @@ def summary_function(outputPath:str, summaryFile:Union[str, None], dic_params:di
                     **qoi_data
                 }
                 data_conc = {**data, **dic_params}
-                df = pd.DataFrame([data_conc])
-
-        elif mode == 'time_series':
-            # Check if any function needs microenvironment data
-            needs_microenv = check_functions_need_microenv(qoi_functions)
-            # Load the time series
-            mcds_ts = pcdl.TimeSeries(outputPath, microenv=needs_microenv, graph=False, settingxml=None, verbose=False)
-            list_mcds=mcds_ts.get_mcds_list()
-            #  All data is stored as a list of mcds
-            if qoi_functions is None:
-                # Optional: Remove replicate output folder
-                if (RemoveFolder): rmtree(outputPath)
-                # Entire list of mcds is returned if drop_columns is empty
-                if not drop_columns:
-                    return list_mcds
-                else:
-                    df_list = []
-                    for mcds in list_mcds:
-                        df_cell = mcds.get_cell_df()
-                        df_cell.drop(columns=drop_columns, inplace=True, errors='ignore')
-                        df_list.append(df_cell)
-                    return df_list
-            else:
-                df_list = []
-                for mcds in list_mcds:
-                    try:
-                        qoi_data = {}
-                        for name, func in qoi_functions.items():
-                            func_result = safe_call_qoi_function(func, mcds=mcds, list_mcds=list_mcds)
-                            if func_result is not None:
-                                qoi_data[name] = func_result
-                        if not qoi_data: continue  # Skip if no QoI data was computed
-                        # print(f"Computed QoIs at time {mcds.get_time()}: {qoi_data}")
-                    except Exception as e:
-                        raise RuntimeError(f"Error computing QoIs in summary_function: {e}")
-                    
-                    data = {
-                        'time': mcds.get_time(),
-                        'sampleID': SampleID,
-                        'replicateID': ReplicateID,
-                        **qoi_data
-                    }
-                    data_conc = {**data, **dic_params}
-                    df_list.append(data_conc)
-                df = pd.DataFrame(df_list)
-                
-
-        elif mode == 'summary':
-            # Check if any function needs microenvironment data
-            needs_microenv = check_functions_need_microenv(qoi_functions)
-            
-            # Load the time series and summarize across snapshots
-            mcds_ts = pcdl.TimeSeries(outputPath, microenv=needs_microenv, graph=False, settingxml=None, verbose=False)
-            summary_data = {name: [] for name in qoi_functions.keys()}
-            for mcds in mcds_ts.get_mcds_list():
-                for name, func in qoi_functions.items():
-                    summary_data[name].append(safe_call_qoi_function(func, mcds=mcds))
-            summarized_qois = {name: sum(values) / len(values) for name, values in summary_data.items()}
-            data = {
-                'sampleID': SampleID,
-                'replicateID': ReplicateID,
-                **summarized_qois
-            }
-            data_conc = {**data, **dic_params}
-            df = pd.DataFrame([data_conc])
-
-        else:
-            raise ValueError(f"Invalid mode: {mode}. Supported modes are 'last_snapshot', 'time_series', and 'summary'.")
+                df_list.append(data_conc)
+            df = pd.DataFrame(df_list)
     except FileNotFoundError as e:
         raise RuntimeError(f"Error: Required file not found in {outputPath}. {e}")
     except Exception as e:
@@ -299,17 +256,17 @@ def summary_function(outputPath:str, summaryFile:Union[str, None], dic_params:di
     else:
         return df
 
-def compute_persistent_homology(df:pd.DataFrame, Plot=False) -> tuple:
+def _compute_persistent_homology(df:pd.DataFrame, Plot=False) -> tuple:
     """
     Compute persistent homology vectorization using muspan.
     (source: https://docs.muspan.co.uk/latest/_collections/topology/Topology%203%20-%20persistence%20vectorisation.html)
     
-    Parameters:
-    - df_cells: DataFrame -> DataFrame containing cell data with 'position_x', 'position_y', and 'cell_type' columns.
-    - Plot: bool -> Whether to plot the persistence diagram (optional).
+    Args:
+        df_cells: DataFrame -> DataFrame containing cell data with 'position_x', 'position_y', and 'cell_type' columns.
+        Plot: bool -> Whether to plot the persistence diagram (optional).
     
     Returns:
-    - tuple -> (pd.Series with vectorized persistent homology features, figure or None)
+        tuple -> (pd.Series with vectorized persistent homology features, figure or None)
     """
     import matplotlib.pyplot as plt
     try:
@@ -347,23 +304,21 @@ def compute_persistent_homology(df:pd.DataFrame, Plot=False) -> tuple:
     vectorised_ph,name_of_features = muspan.topology.vectorise_persistence(feature_persistence, method='statistics')
     return pd.Series(vectorised_ph, index=name_of_features), figure
 
-def compute_relational_ph( df: pd.DataFrame, landmark_type: str, witness_type: str, max_dim: int = 1, mode: str = "distance", ax = None) -> tuple:
+def _compute_relational_ph( df: pd.DataFrame, landmark_type: str, witness_type: str, max_dim: int = 1, mode: str = "distance", ax = None) -> tuple:
     """
     Relational Persistent Homology using Dowker/Witness idea.
     A→B (A as vertices, B as witnesses) describes how B are arranged around A geometry.
 
-    Parameters
-    ----------
-    df : DataFrame with columns ['position_x','position_y','cell_type']
-    landmark_type : cell type to use as landmarks (A)
-    witness_type : cell type to use as witnesses (B)
-    max_dim : PH dimension (0 or 1)
-    mode: 'distance' or 'count'
-    ax : matplotlib axis for plotting  (optional)
+    Args:
+        df : DataFrame with columns ['position_x','position_y','cell_type']
+        landmark_type : cell type to use as landmarks (A)
+        witness_type : cell type to use as witnesses (B)
+        max_dim : PH dimension (0 or 1)
+        mode: 'distance' or 'count'
+        ax : matplotlib axis for plotting  (optional)
 
-    Returns
-    -------
-    tuple -> (pd.Series with vectorized persistent homology features, persistence diagram)
+    Returns:
+        tuple -> (pd.Series with vectorized persistent homology features, persistence diagram)
     """
     from scipy.spatial.distance import cdist
     from scipy.spatial import Delaunay
