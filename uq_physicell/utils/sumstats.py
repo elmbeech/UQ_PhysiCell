@@ -99,7 +99,7 @@ def safe_call_qoi_function(func: callable, mcds:Union[pcdl.TimeStep,None]=None, 
     Args:
         func: The QoI function to call
         mcds: pcdl.TimeStep or None -> The mcds object for single snapshot
-        list_mcds: pcdl.TimeSeries or None -> The mcds time series object for multiple snapshots
+        list_mcds: list of pcdl.TimeStep or None -> The mcds time series object for multiple snapshots
     
     Returns:
         Result of the QoI function
