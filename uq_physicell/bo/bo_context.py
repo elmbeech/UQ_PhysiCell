@@ -34,6 +34,7 @@ else:
 
 # GPyTorch imports
 try:
+    import gpytorch
     from gpytorch.mlls.sum_marginal_log_likelihood import SumMarginalLogLikelihood
     from gpytorch.mlls import ExactMarginalLogLikelihood
 except ImportError:
