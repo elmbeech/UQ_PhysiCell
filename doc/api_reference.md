@@ -40,6 +40,14 @@ Tools for sensitivity analysis, parameter sampling, and model analysis.
    :undoc-members:
 ```
 
+### Utils
+
+```{eval-rst}
+.. automodule:: uq_physicell.model_analysis.utils
+   :members:
+   :undoc-members:
+```
+
 ## Bayesian Optimization Module
 
 Multi-objective Bayesian optimization for model calibration.
