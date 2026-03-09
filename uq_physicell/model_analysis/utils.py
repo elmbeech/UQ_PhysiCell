@@ -8,20 +8,20 @@ from ..utils.sumstats import recreate_qoi_functions, safe_call_qoi_function
 
 def reshape_sa_expanded_data(expanded_data: pd.DataFrame, qoi_columns: list) -> pd.DataFrame:
     """Reshape expanded sensitivity analysis data for pivot table analysis.
-    
+
     This function transforms time-series data from long format (multiple rows per sample)
     to wide format (columns for each time point) to facilitate statistical analysis.
-    
+
     Args:
         expanded_data (pd.DataFrame): DataFrame containing expanded simulation data
             with SampleID, ReplicateID, time, and QoI columns.
         qoi_columns (list): List of quantity of interest column names to reshape.
-    
+
     Returns:
         pd.DataFrame: Reshaped DataFrame with multi-level columns where each QoI
                      and time point becomes a separate column indexed by SampleID
                      and ReplicateID.
-    
+
     Example:
         >>> data = pd.DataFrame({
         ...     'SampleID': [0, 0, 1, 1],
@@ -59,11 +59,11 @@ def reshape_sa_expanded_data(expanded_data: pd.DataFrame, qoi_columns: list) -> 
 
 def mcds_list_to_qoi_df_for_sa(recreated_qoi_funcs, all_sample_ids, chunk_size, db_file) -> pd.DataFrame:
     """Convert a list of MCDS objects to a DataFrame of quantities of interest for sensitivity analysis.
-    
+
     This function processes a list of MCDS simulation results, extracting relevant
     quantities of interest (QoIs) at each time point and organizing them into a
     structured DataFrame suitable for sensitivity analysis.
-    
+
     Args:
         recreated_qoi_funcs (dict): Dictionary of QoI functions where keys are QoI names
                                    and values are callable functions.
@@ -88,7 +88,7 @@ def mcds_list_to_qoi_df_for_sa(recreated_qoi_funcs, all_sample_ids, chunk_size, 
                 data = {'SampleID': SampleID, 'ReplicateID': ReplicateID}
                 for id_time, mcds in enumerate(mcds_ts_list):
                     data[f"time_{id_time}"] = mcds.get_time()
-                    try: 
+                    try:
                         for qoi_name, qoi_func in recreated_qoi_funcs.items():
                             function_result = safe_call_qoi_function(qoi_func, mcds=mcds, list_mcds=mcds_ts_list)
                             if function_result is not None:
@@ -99,17 +99,63 @@ def mcds_list_to_qoi_df_for_sa(recreated_qoi_funcs, all_sample_ids, chunk_size, 
                 # Store the data in a DataFrame
                 df_qoi_replicate = pd.DataFrame({key: [value] for key, value in data.items()})
                 df_qois = pd.concat([df_qois, df_qoi_replicate], ignore_index=True)
-    
+
     df_qois = df_qois.reset_index(drop=True)
+    return df_qois
+
+def mcds_list_to_qoi_df_long(recreated_qoi_funcs, all_sample_ids, chunk_size, db_file) -> pd.DataFrame:
+    """Convert a list of MCDS objects to a DataFrame  of quantities of interest in long format.
+
+    This function processes a list of MCDS simulation results, extracting relevant
+    quantities of interest (QoIs) at each time point and organizing them into a long
+    structured DataFrame.
+
+    Args:
+        recreated_qoi_funcs (dict): Dictionary of QoI functions where keys are QoI names
+                                   and values are callable functions.
+        all_sample_ids (list): List of all sample IDs to process.
+        chunk_size (int): Number of samples to process in each chunk to manage memory usage.
+        db_file (str): Path to the database file containing simulation output.
+    Returns:
+        pd.DataFrame: DataFrame with calculated QoI values indexed by SampleID
+                        and ReplicateID, with columns for each QoI - columns combined with time points.
+    """
+    # Process samples in chunks to avoid memory issues
+    ls_column = ['SampleID','ReplicateID', 'time'] + sorted(recreated_qoi_funcs.keys())
+    llo_data = []
+    for i in range(0, len(all_sample_ids), chunk_size):
+        chunk_sample_ids = all_sample_ids[i:i + chunk_size]
+        # Load only this chunk of data
+        df_output = load_output(db_file, sample_ids=chunk_sample_ids, load_data=True)
+        for SampleID in sorted(df_output['SampleID'].unique()):
+            df_sample = df_output[df_output['SampleID'] == SampleID]
+            df_qoi_replicate = pd.DataFrame()
+            for ReplicateID in sorted(df_sample['ReplicateID'].unique()):
+                mcds_ts_list = df_sample[df_sample['ReplicateID'] == ReplicateID]['Data'].values[0]
+                # print(f"SampleID: {SampleID}, ReplicateID: {ReplicateID} - mcds_ts_list: {mcds_ts_list}")
+                for mcds in mcds_ts_list:
+                    lo_data = [SampleID, ReplicateID, mcds.get_time()]
+                    try:
+                        for qoi_name, qoi_func in sorted(recreated_qoi_funcs.items()):
+                            # Store functions the qoi result
+                            function_result = safe_call_qoi_function(qoi_func, mcds=mcds, list_mcds=mcds_ts_list)
+                            lo_data.append(function_result)
+                    except Exception as e:
+                        raise RuntimeError(f"Error calculating QoIs for SampleID: {SampleID}, ReplicateID: {ReplicateID} - QoI: {qoi_name}_{id_time}: {e}")
+                    # Store the mcds results
+                    llo_data.append(lo_data)
+
+    # Gernate data frame
+    df_qois = pd.DataFrame(llo_data, columns=ls_column)
     return df_qois
 
 def mcds_list_to_qoi_df_for_calib(recreated_qoi_funcs, all_sample_ids, chunk_size, db_file) -> pd.DataFrame:
     """Convert a list of MCDS objects to a DataFrame of quantities of interest for calibration.
-    
+
     This function processes a list of MCDS simulation results, extracting relevant
     quantities of interest (QoIs) and organizing them into a structured DataFrame
     suitable for calibration tasks.
-    
+
     Args:
         recreated_qoi_funcs (dict): Dictionary of QoI functions where keys are QoI names
                                    and values are callable functions.
@@ -132,7 +178,7 @@ def mcds_list_to_qoi_df_for_calib(recreated_qoi_funcs, all_sample_ids, chunk_siz
                 mcds_ts_list = df_sample[df_sample['ReplicateID'] == ReplicateID]['Data'].values[0]
                 for id_time, mcds in enumerate(mcds_ts_list):
                     data = {'SampleID': SampleID, 'ReplicateID': ReplicateID, 'time': mcds.get_time()}
-                    try: 
+                    try:
                         for qoi_name, qoi_func in recreated_qoi_funcs.items():
                             function_result = safe_call_qoi_function(qoi_func, mcds=mcds, list_mcds=mcds_ts_list)
                             if function_result is not None:
@@ -148,22 +194,22 @@ def mcds_list_to_qoi_df_for_calib(recreated_qoi_funcs, all_sample_ids, chunk_siz
 
 def calculate_qoi_from_sa_db(db_file: str, qoi_functions: dict, chunk_size: int = 10, mode='sa') -> pd.DataFrame:
     """Calculate quantities of interest from sensitivity analysis database results.
-    
-    This function loads simulation results from a database in chunks and applies QoI 
-    functions to extract meaningful metrics from the time-series data. Processing in 
+
+    This function loads simulation results from a database in chunks and applies QoI
+    functions to extract meaningful metrics from the time-series data. Processing in
     chunks helps avoid excessive memory usage for large databases.
-    
+
     Args:
         db_file (str): Path to the SQLite database containing simulation results.
         qoi_functions (dict): Dictionary of QoI functions where keys are QoI names
                            and values are lambda functions or string representations.
         chunk_size (int, optional): Number of samples to process at a time. Default is 10.
                                    Adjust based on available memory and data size.
-    
+
     Returns:
         pd.DataFrame: DataFrame with calculated QoI values indexed by SampleID
                      and ReplicateID, with columns for each QoI.
-    
+
     Example:
         >>> qoi_funcs = {
         ...     'final_cells': 'lambda data: data[-1]["cell_count"]',
@@ -175,7 +221,7 @@ def calculate_qoi_from_sa_db(db_file: str, qoi_functions: dict, chunk_size: int 
     # Load sample IDs to determine what to process
     dic_samples = load_samples(db_file)
     all_sample_ids = sorted(dic_samples.keys())
-    
+
     # Recreate QoI functions from their string representations
     recreated_qoi_funcs = recreate_qoi_functions(qoi_functions)
     if mode == 'sa':
@@ -192,17 +238,26 @@ def calculate_qoi_from_sa_db(db_file: str, qoi_functions: dict, chunk_size: int 
             chunk_size=chunk_size,
             db_file=db_file
         )
+    elif mode == 'long':
+        df_qois = mcds_list_to_qoi_df_long(
+            recreated_qoi_funcs=recreated_qoi_funcs,
+            all_sample_ids=all_sample_ids,
+            chunk_size=chunk_size,
+            db_file=db_file
+        )
     else:
         raise ValueError(f"Unknown mode '{mode}'. Supported modes are 'sa' and 'calib'.")
 
     return df_qois
 
+
+
 def calculate_qoi_statistics(df_qois_data: pd.DataFrame, qoi_funcs: dict, db_file_path: str, ignore_db_consistency: bool = False) -> pd.DataFrame:
     """Calculate statistical summaries of quantities of interest across replicates.
-    
+
     This function computes mean and standard deviation of QoI values across
     simulation replicates for each parameter sample, enabling uncertainty quantification.
-    
+
     Args:
         df_qois_data (pd.DataFrame): DataFrame containing QoI values with SampleID,
                                    ReplicateID, and QoI columns.
@@ -213,10 +268,10 @@ def calculate_qoi_statistics(df_qois_data: pd.DataFrame, qoi_funcs: dict, db_fil
     Returns:
         pd.DataFrame: DataFrame with statistical summaries (mean, std) of QoIs
                      grouped by SampleID, with columns for each QoI statistic.
-    
+
     Raises:
         ValueError: If no QoI functions are defined or data format is invalid.
-    
+
     Example:
         >>> qoi_funcs = {'cell_count': lambda x: x.sum(), 'growth_rate': None}
         >>> stats_df = calculate_qoi_statistics(qoi_data, qoi_funcs, 'study.db')
