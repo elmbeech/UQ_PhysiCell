@@ -78,8 +78,36 @@ Install them with: `pip install botorch gpytorch torch`
 The Approximate Bayesian Computation module requires additional dependency (pyabc).
 Install them with: `pip install pyabc`
 ```
+## Database
+### Model Analysis
+```{eval-rst}
+.. automodule:: uq_physicell.database.ma_db
+   :members:
+   :undoc-members:
+```
+
+### Bayesian Optimization
+```{eval-rst}
+.. automodule:: uq_physicell.database.bo_db
+   :members:
+   :undoc-members:
+```
 
 ## Utils
+
+### Summary of simulation
+```{eval-rst}
+.. automodule:: uq_physicell.utils.sumstats
+   :members:
+   :undoc-members:
+```
+
+### Wrapper of output
+```{eval-rst}
+.. automodule:: uq_physicell.utils.model_wrapper
+   :members:
+   :undoc-members:
+```
 
 ### Distances
 ```{eval-rst}
@@ -87,4 +115,3 @@ Install them with: `pip install pyabc`
    :members:
    :undoc-members:
 ```
-
