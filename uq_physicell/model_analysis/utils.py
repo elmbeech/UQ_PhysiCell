@@ -205,6 +205,8 @@ def calculate_qoi_from_sa_db(db_file: str, qoi_functions: dict, chunk_size: int 
                            and values are lambda functions or string representations.
         chunk_size (int, optional): Number of samples to process at a time. Default is 10.
                                    Adjust based on available memory and data size.
+        mode:  Specify the form of the result dataframe. Possible modes are
+            sa, calib, and long. The default is sa.
 
     Returns:
         pd.DataFrame: DataFrame with calculated QoI values indexed by SampleID
