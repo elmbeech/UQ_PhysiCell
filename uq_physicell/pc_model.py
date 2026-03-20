@@ -16,6 +16,7 @@ import shutil
 import time
 import copy
 import datetime
+import argparse
 
 class PhysiCell_Model:
     """ A class to manage PhysiCell model configurations and executions.
@@ -783,3 +784,42 @@ def compile_physicell(pc_path, model_path, executable_path=None, force_compile=F
     finally:
         # Restore original working directory
         os.chdir(original_cwd)
+
+
+def file_check():
+    # Generate argument parser instance
+    parser = argparse.ArgumentParser(
+        prog='uqpc_file_check',
+        description = "The function loads a PhysiCell model, specified by the UQ-PhysiCell ini file and structure, to check its definition files."
+    )
+    # Specify arguments
+    parser.add_argument(
+        'path_to_ini',
+        #nargs = 1,
+        help = "Path to UQ-PhysiCell ini file.",
+    )
+    parser.add_argument(
+        'structure',
+        #nargs = 1,
+        help = "Model structure, specified inside the UQ-PhysiCell ini file to be checked for.",
+    )
+    parser.add_argument(
+        '-v', '--verbose',
+        default = 'true',
+        help = "Set verbose to false for less text output while processing. The default is true.",
+    )
+    # Parse arguments
+    args = parser.parse_args()
+
+    # Call PhysiCell_Model
+    print(f'Loading and checking ini file and structure ...')
+    print(args)
+    o_model = PhysiCell_Model(
+        configFilePath = args.path_to_ini,
+        keyModel = args.structure,
+        verbose = False if args.verbose.lower().startswith('f') else True,
+    )
+    print('ok!')
+
+    # output
+    return 0
