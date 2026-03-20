@@ -58,9 +58,9 @@ dependencies = [
     "numpy",
     "pandas",
     "pcdl",
+    "pyqt5",
     "SALib",
     "scipy",
-    "pyqt5",
     "seaborn",
 ]
 
@@ -73,7 +73,6 @@ abc = [
 bo = [
     "botorch",
     "gpytorch",
-    "seaborn",
     "torch",
 ]
 
