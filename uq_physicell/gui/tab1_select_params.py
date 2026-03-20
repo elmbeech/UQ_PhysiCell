@@ -679,6 +679,7 @@ def get_rule_value(main_window, rule_key):
             (main_window.csv_data.iloc[:, 2] == direction) &
             (main_window.csv_data.iloc[:, 3] == behavior)
         ]
+        
         if not rule_row.empty:
             if parameter == "saturation":
                 return rule_row.iloc[0, 4]
@@ -692,8 +693,10 @@ def get_rule_value(main_window, rule_key):
                 return rule_row.iloc[0, 8]
         else:
             main_window.update_output_tab1(main_window, f"Warning: No matching rule found for key '{rule_key}' in the CSV.")
+            print(f"Warning: No matching rule found for key '{rule_key}' in the CSV.")
     except Exception as e:
         main_window.update_output_tab1(main_window, f"Error retrieving rule value for key '{rule_key}': {e}")
+        print(f"Error retrieving rule value for key '{rule_key}': {e}")
     return None
 
 def set_parameter_value(main_window):
