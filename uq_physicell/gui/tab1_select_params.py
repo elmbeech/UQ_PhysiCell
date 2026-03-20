@@ -264,6 +264,10 @@ def create_combo_box(main_window, parent_node, label):
         # Append the 'index' attribute if it exists
         if "index" in child.attrib:
             display_name = f"{display_name}[{int(child.get('index')) + 1}]"
+        # Append the 'ID' attribute for Dirichlet_options boundary_value
+        elif display_name == "boundary_value":
+            display_name = f"{display_name}[@ID='" + child.get('ID') + "']"
+        # Generic
         combo_box.addItem(display_name)
     combo_box.currentIndexChanged.connect(lambda: main_window.handle_combo_selection(main_window, combo_box, parent_node))
 
@@ -295,6 +299,8 @@ def handle_combo_selection(main_window, combo_box, parent_node):
         display_name = child.get("name", child.tag)
         if "index" in child.attrib:
             display_name = f"{display_name}[{int(child.get('index')) + 1}]"
+        elif display_name == "boundary_value":
+            display_name = f"{display_name}[@ID='{child.get('ID')}']"
         if display_name == selected_display_name:
             # Clear combo boxes below the current one
             main_window.clear_combo_boxes(main_window, starting_index=main_window.combo_hbox.indexOf(combo_box) + 1)
@@ -651,8 +657,11 @@ def get_parameter_path_xml(main_window, node):
         if "name" in node.attrib:
             node_name += f"[@name='{node.get('name')}']"
         # Append 'index' attribute if it exists
-        if "index" in node.attrib:
+        elif "index" in node.attrib:
             node_name += f"[{int(node.get('index')) + 1}]"
+        # Use ID attribute if Dirichlet_options boundary_value
+        elif "boundary_value" == node.tag :
+            node_name += f"[@ID='{node.get('ID')}']"
         path.insert(0, node_name)
         node = main_window.parent_map.get(node)  # Use the parent map to find the parent
     return ".//" + "/".join(path)
