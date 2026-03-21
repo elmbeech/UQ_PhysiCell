@@ -801,7 +801,7 @@ def file_check():
     parser.add_argument(
         'structure',
         nargs = '*',
-        default = ['None'],
+        default = [''],
         help = "Model structures, specified inside the UQ-PhysiCell ini file, to be checked for. None will check all structures. The default is None.",
     )
     parser.add_argument(
@@ -816,7 +816,7 @@ def file_check():
     print(f'Loading and checking ini file and structure ...')
     print(args)
     # Fetch structures
-    if args.structure[0].lower() == 'none':
+    if args.structure[0] == '':
         config = configparser.ConfigParser()
         config.read(args.path_to_ini)
         ls_structure = config.sections()
