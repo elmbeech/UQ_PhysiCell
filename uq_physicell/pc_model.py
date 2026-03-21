@@ -800,8 +800,9 @@ def file_check():
     )
     parser.add_argument(
         'structure',
-        #nargs = 1,
-        help = "Model structure, specified inside the UQ-PhysiCell ini file to be checked for.",
+        nargs = '*',
+        default = ['None'],
+        help = "Model structures, specified inside the UQ-PhysiCell ini file, to be checked for. None will check all structures. The default is None.",
     )
     parser.add_argument(
         '-v', '--verbose',
@@ -811,15 +812,24 @@ def file_check():
     # Parse arguments
     args = parser.parse_args()
 
-    # Call PhysiCell_Model
+    # Check
     print(f'Loading and checking ini file and structure ...')
     print(args)
-    o_model = PhysiCell_Model(
-        configFilePath = args.path_to_ini,
-        keyModel = args.structure,
-        verbose = False if args.verbose.lower().startswith('f') else True,
-    )
-    print('ok!')
-
+    # Fetch structures
+    if args.structure[0].lower() == 'none':
+        config = configparser.ConfigParser()
+        config.read(args.path_to_ini)
+        ls_structure = config.sections()
+        print("Dectected structures:", ls_structure)
+    else:
+        ls_structure = args.structure
+    # Initialize models
+    for s_structure in ls_structure:
+        o_model = PhysiCell_Model(
+            configFilePath = args.path_to_ini,
+            keyModel = s_structure,
+            verbose = False if args.verbose.lower().startswith('f') else True,
+        )
     # output
+    print('ok!')
     return 0
