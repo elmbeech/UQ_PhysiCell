@@ -802,7 +802,7 @@ def file_check():
         'structure',
         nargs = '*',
         default = [''],
-        help = "Model structures, specified inside the UQ-PhysiCell ini file, to be checked for. None will check all structures. The default is None.",
+        help = "Model structures, specified inside the UQ-PhysiCell ini file, to be checked for. No space or whitespace will check all structures. The default is no space.",
     )
     parser.add_argument(
         '-v', '--verbose',
