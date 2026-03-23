@@ -97,6 +97,7 @@ all = [
 
 [project.scripts]
 uq_physicell = "uq_physicell.gui.main_window:main"
+uq_file_check = "uq_physicell.pc_model:file_check"
 
 [project.urls]
 "Homepage" = "https://github.com/heberlr/UQ_PhysiCell"

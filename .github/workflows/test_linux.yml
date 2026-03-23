@@ -8,15 +8,16 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@main
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@main
       with:
         python-version: '3.11'
 
     - name: Install dependencies
       run: |
+        sudo apt update
         sudo apt install libopenmpi-dev
         python -m pip install --upgrade pip
         python -m pip install flake8 pytest pytest-cov
@@ -40,7 +41,7 @@ jobs:
 
     - name: Upload coverage to Codecov (optional)
       if: success()
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@main
       with:
         file: ./coverage.xml
         flags: unittests
