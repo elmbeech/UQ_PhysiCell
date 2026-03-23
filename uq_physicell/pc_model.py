@@ -507,6 +507,7 @@ def _set_xml_element_value(xml_root: ET.Element, key: str, val: Union[str, int, 
                 # key cell cycle example: ".//*[@name='CD8 Tcell']/phenotype/cycle/phase_transition_rates/rate[4]"
                 # key substrates example: ".//*[@name='TNF']/physical_parameter_set/diffusion_coefficient"
                 # key parameter example: ".//random_seed"
+                # key to attribute .//microenvironment_setup/variable[@name='substrate']/Dirichlet_options/boundary_value[@ID='xmin']/[@enabled]
                 """)
     # Get last segment of the key to extract the attribute name
     last_seg = key.rsplit("/", 1)[-1]
