@@ -137,9 +137,15 @@ def _create_named_function_from_string(func_str: str, qoi_name: str) -> callable
     else:
         arg_name = 'mcds'
     
-    # Create a restricted namespace with necessary imports and no built-in functions
+    # Create a restricted namespace with necessary imports and no built-in functions.
     namespace = {'pd': pd, 'np': np, 'len': len, 'sum': sum, 'map': map, '__builtins__': {}}
-    
+    # Add locally defined QoI helper callables so lambda strings can reference them.
+    namespace.update({
+        name: obj
+        for name, obj in globals().items()
+        if callable(obj) and name.startswith('qoi_func')
+    })
+
     # Evaluate the lambda function once at creation time
     try:
         compiled_func = eval(func_str, namespace)
@@ -256,7 +262,7 @@ def summary_function(outputPath:str, summaryFile:Union[str, None], dic_params:di
     else:
         return df
 
-def _compute_persistent_homology(df:pd.DataFrame, Plot=False) -> tuple:
+def qoi_func_persistent_homology(df:pd.DataFrame, Plot=False) -> tuple:
     """
     Compute persistent homology vectorization using muspan.
     (source: https://docs.muspan.co.uk/latest/_collections/topology/Topology%203%20-%20persistence%20vectorisation.html)
@@ -304,7 +310,7 @@ def _compute_persistent_homology(df:pd.DataFrame, Plot=False) -> tuple:
     vectorised_ph,name_of_features = muspan.topology.vectorise_persistence(feature_persistence, method='statistics')
     return pd.Series(vectorised_ph, index=name_of_features), figure
 
-def _compute_relational_ph( df: pd.DataFrame, landmark_type: str, witness_type: str, max_dim: int = 1, mode: str = "distance", ax = None) -> tuple:
+def qoi_func_relational_ph( df: pd.DataFrame, landmark_type: str, witness_type: str, max_dim: int = 1, mode: str = "distance", ax = None) -> tuple:
     """
     Relational Persistent Homology using Dowker/Witness idea.
     A→B (A as vertices, B as witnesses) describes how B are arranged around A geometry.
@@ -318,7 +324,7 @@ def _compute_relational_ph( df: pd.DataFrame, landmark_type: str, witness_type: 
         ax : matplotlib axis for plotting  (optional)
 
     Returns:
-        tuple -> (pd.Series with vectorized persistent homology features, persistence diagram)
+        tuple -> (pd.Series with vectorized persistent homology features (summary statistics), raw persistence diagram (list of (dimension, (birth, death)) pairs)
     """
     from scipy.spatial.distance import cdist
     from scipy.spatial import Delaunay
@@ -329,13 +335,15 @@ def _compute_relational_ph( df: pd.DataFrame, landmark_type: str, witness_type: 
     A_points = df[df["cell_type"] == landmark_type][["position_x","position_y"]].to_numpy()
     B_points = df[df["cell_type"] == witness_type][["position_x","position_y"]].to_numpy()
     if len(A_points) == 0 or len(B_points) == 0:
-        raise ValueError("Both landmark_type and witness_type must be present.")
+        print("Warning:Both landmark_type and witness_type must be present.")
+        return (None, None)
     # Pairwise distances B×A
     D = cdist(B_points, A_points)
 
     # Build candidate simplex list from landmarks
     if len(A_points) < 3:
-        raise ValueError("At least 3 landmark points are required for relational PH.")
+        print("Warning: At least 3 landmark points are required for relational PH.")
+        return (None, None)
     # Use Delaunay to match Python repo behavior
     tri = Delaunay(A_points)
     # vertices = all points
@@ -397,9 +405,17 @@ def _compute_relational_ph( df: pd.DataFrame, landmark_type: str, witness_type: 
             dgms.append(np.array(intervals))
     feature_persistence = {'dgms': dgms}
 
-    # Vectorize diagram using muspan's statistics
-    vec, names = muspan.topology.vectorise_persistence(feature_persistence, method="statistics")
-    vec = pd.Series(vec, index=names)
+    # Vectorize diagram using muspan's statistics. Some degenerate diagrams can
+    # produce empty finite arrays in muspan/numpy percentile calls.
+    try:
+        vec, names = muspan.topology.vectorise_persistence(feature_persistence, method="statistics")
+        vec = pd.Series(vec, index=names)
+    except (IndexError, ValueError) as e:
+        print(
+            f"Warning: Could not vectorize relational PH for "
+            f"{landmark_type}->{witness_type}: {e}"
+        )
+        return (None, diag)
 
     # Plot
     if ax is not None:
