@@ -34,6 +34,7 @@ class CalibrationContext:
         obsData_columns (dict): Dictionary mapping QoI names to their corresponding columns in the observed data.
         model_config (dict): Configuration dictionary for the PhysiCell model, including paths and structure names.
         qoi_functions (dict): Dictionary of functions to compute quantities of interest (QoIs) from model outputs.
+        qoi_def (dict): first-class object, that can be used in qoi_functions lambda string, mapped to their name.
         distance_functions (dict): Dictionary of distance functions with their weights for comparing model outputs to observed data.
         prior (Distribution): Distribution defining the prior distributions for parameters
         abc_options (dict): Options for ABC-SMC including population parameters, sampling strategies, and convergence criteria.
@@ -46,10 +47,11 @@ class CalibrationContext:
         obsData: Union[str, dict], 
         obsData_columns: dict, 
         model_config: dict, 
-        qoi_functions: dict, 
+        qoi_functions: dict,
         distance_functions: dict, 
         prior: Distribution, 
         abc_options: dict, 
+        qoi_def:dict={},
         logger: Optional[logging.Logger] = None
     ):
         """Initialize CalibrationContext with comprehensive validation and setup."""
@@ -57,6 +59,7 @@ class CalibrationContext:
         self.db_path = db_path
         self.model_config = model_config
         self.qoi_functions = qoi_functions
+        self.qoi_def = qoi_def
         self.distance_functions = distance_functions
         self.prior = prior
         self.abc_options = abc_options
@@ -328,7 +331,18 @@ class CalibrationContext:
         dic_all_replicates = {}
         for replicate_id in replicates:
             try:
-                _, _, result_data = run_replicate_serializable(self.model_config, sample_id, replicate_id, dic_pars_xml, dic_pars_rules, qoi_functions=self.qoi_functions, return_binary_output=False, custom_summary_function=self.summary_function)
+                _, _, result_data = run_replicate_serializable(
+                    PhysiCellModel_conf=self.model_config,
+                    sample_id=sample_id,
+                    replicate_id=replicate_id,
+                    ParametersXML=dic_pars_xml,
+                    ParametersRules=dic_pars_rules,
+                    qoi_functions=self.qoi_functions,
+                    qoi_def=self.qoi_def,
+                    return_binary_output=False,
+                    #drop_columns,
+                    custom_summary_function=self.summary_function,
+                )
                 dic_all_replicates[replicate_id] = result_data
             except Exception as e:
                 raise RuntimeError(f"Error in RunModel (SampleID: {sample_id}): {e}")

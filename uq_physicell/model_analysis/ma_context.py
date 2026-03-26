@@ -44,6 +44,8 @@ class ModelAnalysisContext:
             for each parameter name and values containing 'ref_value', 'lower_bound',
             'upper_bound', and 'perturbation' information.
         qois_info (dict): Dictionary containing Quantities of Interest definitions.
+        qoi_def (dict): first-class object, that can be used in qoi_functions
+            lambda string, mapped to their name.
         parallel_method (str, optional): Parallelization method. Options are:
             'inter-process' (single node), 'inter-node' (MPI), or 'serial'.
             Defaults to 'inter-process'.
@@ -63,14 +65,16 @@ class ModelAnalysisContext:
             sampler:str, 
             params_info:dict, 
             qois_info:dict, 
+            qoi_def:dict={},
             parallel_method:str='inter-process', 
             num_workers:int=1, 
             summary_function=None,
             logger: logging.Logger=None):
         self.db_path = db_path
         self.params_dict = params_info  # Dictionary with parameter names, ref value, ranges, and perturbations.
-        self.parallel_method = parallel_method # inter-process (single node) or inter-node (mpi)
         self.qois_dict = qois_info
+        self.qoi_def = qoi_def
+        self.parallel_method = parallel_method # inter-process (single node) or inter-node (mpi)
         self.num_workers = num_workers
         self.summary_function = summary_function
         self.logger = logger if logger is not None else logging.getLogger(__name__)
@@ -291,12 +295,19 @@ def run_simulations(context: ModelAnalysisContext):
                 }
                 # Submit the job to the executor
                 context.futures.append(executor.submit(
-                        run_replicate_serializable, model_config,
-                        All_Samples[ind_sim], All_Replicates[ind_sim],
-                        ParametersXML, ParametersRules, return_binary_output=True,
-                        qoi_functions=context.qois_dict, custom_summary_function=context.summary_function
-                    ))
-            
+                    run_replicate_serializable,
+                    PhysiCellModel_conf=model_config,
+                    sample_id=All_Samples[ind_sim],
+                    replicate_id=All_Replicates[ind_sim],
+                    ParametersXML=ParametersXML,
+                    ParametersRules=ParametersRules,
+                    qoi_functions=context.qois_dict,
+                    qoi_def=context.qoi_def,
+                    return_binary_output=True,
+                    #drop_columns,
+                    custom_summary_function=context.summary_function,
+                ))
+             
             # Use as_completed with a short timeout to avoid blocking when cancelled
             remaining_futures = list(context.futures)
             while remaining_futures and not context.cancelled():
@@ -367,7 +378,19 @@ def run_simulations(context: ModelAnalysisContext):
                         All_Samples[ind_sim], All_Replicates[ind_sim], ParametersXML, ParametersRules, RemoveConfigFile=True, SummaryFunction=context.summary_function)
                     result_data = pickle.dumps(result_data_nonserialized)
                 else:
-                    _, _, result_data = run_replicate(PhysiCellModel, All_Samples[ind_sim], All_Replicates[ind_sim], ParametersXML,ParametersRules, context.qois_dict)
+                    _, _, result_data = run_replicate(
+                        PhysiCellModel=PhysiCellModel,
+                        sample_id=All_Samples[ind_sim],
+                        replicate_id=All_Replicates[ind_sim],
+                        ParametersXML=ParametersXML,
+                        ParametersRules=ParametersRules,
+                        qoi_functions=context.qois_dict,
+                        qoi_def=context.qoi_def,
+                        #return_binary_output,
+                        #drop_columns,
+                        #custom_summary_function,
+                    )
+ 
             except Exception as e:
                 context.logger.error(
                     f"Rank {rank}: Error running simulation for Sample: {All_Samples[ind_sim]}, Replicate: {All_Replicates[ind_sim]}: {e}"
@@ -403,8 +426,18 @@ def run_simulations(context: ModelAnalysisContext):
                     All_Samples[ind_sim], All_Replicates[ind_sim], ParametersXML, ParametersRules, RemoveConfigFile=True, SummaryFunction=context.summary_function)
                 result_data = pickle.dumps(result_data_nonserialized)
             else:
-                _, _, result_data = run_replicate(PhysiCellModel, All_Samples[ind_sim], All_Replicates[ind_sim], ParametersXML,
-                                        ParametersRules, context.qois_dict)
+                _, _, result_data = run_replicate(
+                    PhysiCell_Model=PhysiCellModel,
+                    sample_id=All_Samples[ind_sim],
+                    replicate_id=All_Replicates[ind_sim],
+                    ParametersXML=ParametersXML,
+                    ParametersRules=ParametersRules,
+                    qoi_functions=context.qois_dict,
+                    qoi_def=context.qoi_def,
+                    #return_binary_output,
+                    #drop_columns,
+                    #custom_summary_function,
+                )
 
             # Write to the database directly (no locks or MPI synchronization needed)
             context.logger.info(f"Rank {rank} writing to the database for Sample: {All_Samples[ind_sim]}, Replicate: {All_Replicates[ind_sim]}")
