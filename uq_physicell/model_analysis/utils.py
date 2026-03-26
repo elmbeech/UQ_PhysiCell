@@ -121,44 +121,29 @@ def mcds_list_to_qoi_df_long(recreated_qoi_funcs, all_sample_ids, chunk_size, db
                         and ReplicateID, with columns for each QoI - columns combined with time points.
     """
     # Process samples in chunks to avoid memory issues
-    b_column = True
-    ls_column = ['SampleID', 'time', 'ReplicateID']
+    ls_column = ['SampleID', 'time', 'ReplicateID'] + sorted(recreated_qoi_funcs.keys())
     llo_data = []
     for i in range(0, len(all_sample_ids), chunk_size):
         chunk_sample_ids = all_sample_ids[i:i + chunk_size]
         # Load only this chunk of data
         df_output = load_output(db_file, sample_ids=chunk_sample_ids, load_data=True)
-        # Fetch mcds from sample replicate
-        for s_sample in sorted(df_output['SampleID'].unique()):
-            df_sample = df_output[df_output['SampleID'] == s_sample]
+        for SampleID in sorted(df_output['SampleID'].unique()):
+            df_sample = df_output[df_output['SampleID'] == SampleID]
             df_qoi_replicate = pd.DataFrame()
-            for s_replicate in sorted(df_sample['ReplicateID'].unique()):
-                l_mcds = df_sample[df_sample['ReplicateID'] == s_replicate]['Data'].values[0]
-                # print(f"SampleID: {s_sample}, ReplicateID: {s_replicate} - mcds_ts_list: {l_mcds}")
-                for mcds in l_mcds:
-                    lo_data = [s_sample, mcds.get_time(), s_replicate]
+            for ReplicateID in sorted(df_sample['ReplicateID'].unique()):
+                mcds_ts_list = df_sample[df_sample['ReplicateID'] == ReplicateID]['Data'].values[0]
+                # print(f"SampleID: {SampleID}, ReplicateID: {ReplicateID} - mcds_ts_list: {mcds_ts_list}")
+                for mcds in mcds_ts_list:
+                    lo_data = [SampleID, mcds.get_time(), ReplicateID]
                     try:
-                        for s_qoi_name, o_qoi_func in sorted(recreated_qoi_funcs.items()):
-                            # Execut qoi function on mcds
-                            o_result = safe_call_qoi_function(o_qoi_func, mcds=mcds, list_mcds=l_mcds)
-                            # Save results from multi qoi function
-                            if type(o_result) in {dict, pd.Series}:
-                                for s_key, o_value in sorted(o_result.items()):
-                                    if b_column:
-                                        ls_column.append(f'{s_qoi_name}_{s_key}')
-                                    lo_data.append(o_value)
-                            # Save result from single qoi function
-                            else:
-                                if b_column:
-                                    ls_column.append(s_qoi_name)
-                                lo_data.append(o_result)
-                    # Error handling
+                        for qoi_name, qoi_func in sorted(recreated_qoi_funcs.items()):
+                            # Store functions the qoi result
+                            function_result = safe_call_qoi_function(qoi_func, mcds=mcds, list_mcds=mcds_ts_list)
+                            lo_data.append(function_result)
                     except Exception as e:
-                        raise RuntimeError(f"Error calculating QoIs for SampleID: {s_sample}, ReplicateID: {s_replicate} - QoI: {s_qoi_name}: {e}")
-                    # Save row
+                        raise RuntimeError(f"Error calculating QoIs for SampleID: {SampleID}, ReplicateID: {ReplicateID} - QoI: {qoi_name}: {e}")
+                    # Store the mcds results
                     llo_data.append(lo_data)
-                    # Update flag
-                    b_column = False
 
     # Gernate data frame
     df_qois = pd.DataFrame(llo_data, columns=ls_column)
@@ -219,12 +204,12 @@ def calculate_qoi_from_sa_db(db_file:str, qoi_functions:dict, qoi_def:dict={}, c
         db_file (str): Path to the SQLite database containing simulation results.
         qoi_functions (dict): Dictionary of QoI functions where keys are QoI names
                            and values are lambda functions or string representations.
-        qoi_def (dict): first-class object, that can be used in qoi_functions 
+        qoi_def (dict): first-class object, that can be used in qoi_functions
                         lambda string, mapped to their name.
                         e.g. for a function definition, if the function definition is:
                         def my_func():
                             print('hello world!')
-                            return 0 
+                            return 0
                         then the qoi_def dict would look like this:
                         {'my_func': my_func}
         chunk_size (int, optional): Number of samples to process at a time. Default is 10.
