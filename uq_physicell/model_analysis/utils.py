@@ -147,18 +147,18 @@ def mcds_list_to_qoi_df_long(recreated_qoi_funcs, all_sample_ids, chunk_size, db
                                     if b_column:
                                         ls_column.append(f'{s_qoi_name}_{s_key}')
                                     lo_data.append(o_value)
-                                    llo_data.append(lo_data)
                             # Save result from single qoi function
                             else:
                                 if b_column:
                                     ls_column.append(s_qoi_name)
                                 lo_data.append(o_result)
-                                llo_data.append(lo_data)
                     # Error handling
                     except Exception as e:
                         raise RuntimeError(f"Error calculating QoIs for SampleID: {s_sample}, ReplicateID: {s_replicate} - QoI: {s_qoi_name}: {e}")
-                # Update flag
-                b_column = False
+                    # Save row
+                    llo_data.append(lo_data)
+                    # Update flag
+                    b_column = False
 
     # Gernate data frame
     df_qois = pd.DataFrame(llo_data, columns=ls_column)
