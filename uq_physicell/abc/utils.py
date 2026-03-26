@@ -1,5 +1,8 @@
 
-from abc_context.CalibrationContext import CalibrationContext
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .abc_context import CalibrationContext
 from uq_physicell import __version__ as uq_physicell_version
 from pcdl import __version__ as pcdl_version
 from pyabc import __version__ as pyabc_version
@@ -23,7 +26,7 @@ def insert_adaptive_weights_db(db_file, dict_distances, dict_adaptive_weights):
     conn.commit()
     conn.close()
 
-def insert_metadata_db(db_file:str, abc_context:CalibrationContext):
+def insert_metadata_db(db_file: str, abc_context: "CalibrationContext"):
     import sqlite3
     conn = sqlite3.connect(db_file)
     cursor = conn.cursor()
