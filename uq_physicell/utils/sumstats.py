@@ -119,14 +119,22 @@ def safe_call_qoi_function(func: callable, mcds:Union[pcdl.TimeStep,None]=None, 
     else:
         raise ValueError(f"Unknown parameter name '{param_name}' for QoI function.")
     
-def _create_named_function_from_string(func_str: str, qoi_name: str) -> callable:
+def _create_named_function_from_string(func_str: str, qoi_name: str, qoi_def:dict={}) -> callable:
     """
     Dynamically creates a named function from a string.
     
     Args:
         func_str: The string representation of the function.
         qoi_name: The name of the function to be created.
-    
+        qoi_def (dict): first-class object, that can be used in qoi_functions
+            lambda string, mapped to their name.
+            e.g. for a function definition, if the function definition is:
+            def my_func():
+                print('hello world!')
+                return 0
+            then the qoi_def dict would look like this:
+            {'my_func': my_func}
+
     Returns:
         The created function with preserved parameter inspection capability.
     """
@@ -138,7 +146,7 @@ def _create_named_function_from_string(func_str: str, qoi_name: str) -> callable
         arg_name = 'mcds'
     
     # Create a restricted namespace with necessary imports and no built-in functions
-    namespace = {'pd': pd, 'np': np, 'len': len, 'sum': sum, 'map': map, '__builtins__': {}}
+    namespace = {'pd': pd, 'np': np, 'len': len, 'sum': sum, 'map': map, '__builtins__': {}}.update(qoi_def)
     
     # Evaluate the lambda function once at creation time
     try:
@@ -156,7 +164,7 @@ def _create_named_function_from_string(func_str: str, qoi_name: str) -> callable
     
     return wrapper
 
-def recreate_qoi_functions(qoi_functions: dict) -> dict:
+def recreate_qoi_functions(qoi_functions:dict, qoi_def:dict={}) -> dict:
     """
     Recreate QoI functions from their string representations.
     
@@ -169,14 +177,22 @@ def recreate_qoi_functions(qoi_functions: dict) -> dict:
                     "max_volume": "lambda df: df['total_volume'].max()",
                     "mean_radial_distance": "lambda df: df[['position_x', 'position_y', 'position_z']].apply(lambda row: ((row['position_x']**2 + row['position_y']**2 + row['position_z']**2)**0.5), axis=1).mean()"
                 }
-    
+        qoi_def (dict): first-class object, that can be used in qoi_functions
+            lambda string, mapped to their name.
+            e.g. for a function definition, if the function definition is:
+                def my_func():
+                    print('hello world!')
+                    return 0
+            then the qoi_def dict would look like this:
+                {'my_func': my_func}
+
     Returns:
         Dictionary of recreated QoI functions (keys as names, values as callables)
     """
     recreated_qoi_funcs = {}
     for qoi_name, qoi_value in qoi_functions.items():
         try:
-            recreated_qoi_funcs[qoi_name] = _create_named_function_from_string(qoi_value, qoi_name)
+            recreated_qoi_funcs[qoi_name] = _create_named_function_from_string(qoi_value=qoi_value, qoi_name=qoi_name, qoi_def=qoi_def)
         except Exception as e:
             raise ValueError(f"Error recreating QoI function '{qoi_name}': {e}")
     return recreated_qoi_funcs

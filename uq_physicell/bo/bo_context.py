@@ -67,6 +67,7 @@ class CalibrationContext:
         obsData_columns (dict): Dictionary mapping QoI names to their corresponding columns in the observed data.
         model_config (dict): Configuration dictionary for the PhysiCell model, including paths and structure names.
         qoi_functions (dict): Dictionary of functions to compute quantities of interest (QoIs) from model outputs.
+        qoi_def (dict): first-class object, that can be used in qoi_functions lambda string, mapped to their name.
         distance_functions (dict): Dictionary of functions to compute distances between model outputs and observed data.
         search_space (dict): Dictionary defining the search space for parameters, including bounds and types.
         bo_options (dict): Options for Bayesian Optimization including sampling parameters.
@@ -84,7 +85,8 @@ class CalibrationContext:
         qoi_functions: dict, 
         bo_options: dict,
         distance_functions: dict=None, 
-        search_space: dict=None, 
+        search_space: dict=None,
+        qoi_def:dict={},
         logger: logging.Logger=None
     ):
         """Initialize CalibrationContext with comprehensive validation and setup."""
@@ -94,6 +96,7 @@ class CalibrationContext:
         self.db_path = db_path
         self.model_config = model_config
         self.qoi_functions = qoi_functions
+        self.qoi_def = qoi_def
         self.distance_functions = distance_functions
         self.search_space = search_space
         self.bo_options = bo_options
@@ -230,11 +233,16 @@ class CalibrationContext:
         dic_params_xml = {par_name: par_value for par_name, par_value in params.items() if par_name in PC_model.XML_parameters_variable.values()}
         dic_params_rules = {par_name: par_value for par_name, par_value in params.items() if par_name in PC_model.parameters_rules_variable.values()}
         _, _, result_data = run_replicate_serializable(
-            self.model_config, 
-            sample_id, replicate_id,
-            dic_params_xml, dic_params_rules,
-            qoi_functions=self.qoi_functions, return_binary_output=False,
-            custom_summary_function=self.summary_function
+            PhysiCellModel_conf=self.model_config,
+            sample_id=sample_id,
+            replicate_id=replicate_id,
+            ParametersXML=dic_params_xml,
+            ParametersRules=dic_params_rules,
+            qoi_functions=self.qoi_functions,
+            qoi_def=self.qoi_def,
+            return_binary_output=False,
+            #drop_columns,
+            custom_summary_function=self.summary_function,
         )
         dic_result_data = result_data.to_dict(orient='list')
         dic_result_data_np = {key: np.array(list_values) for key, list_values in dic_result_data.items()}
@@ -414,7 +422,7 @@ class CalibrationContext:
             train_x_list.append(param_dict_to_tensor(dic_params_i, self.search_space))
 
         # MCDS lists to QoIs
-        df_qois_data = calculate_qoi_from_sa_db(self.db_path_initial_samples, self.qoi_functions, mode='calib')
+        df_qois_data = calculate_qoi_from_sa_db(db_file=self.db_path_initial_samples, qoi_functions=self.qoi_functions, qoi_def=self.qoi_def, mode='calib')
         objectives_list = []
         obj_noise_list = []
         for sample_id in dic_samples.keys():
