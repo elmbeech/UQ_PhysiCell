@@ -119,13 +119,13 @@ def safe_call_qoi_function(func: callable, mcds:Union[pcdl.TimeStep,None]=None, 
     else:
         raise ValueError(f"Unknown parameter name '{param_name}' for QoI function.")
     
-def _create_named_function_from_string(func_str: str, qoi_name: str, qoi_def:dict={}) -> callable:
+def _create_named_function_from_string(qoi_name: str, func_str: str, qoi_def:dict={}) -> callable:
     """
     Dynamically creates a named function from a string.
     
     Args:
-        func_str: The string representation of the function.
         qoi_name: The name of the function to be created.
+        func_str: The string representation of the function.
         qoi_def (dict): first-class object, that can be used in qoi_functions
             lambda string, mapped to their name.
             e.g. for a function definition, if the function definition is:
@@ -146,7 +146,9 @@ def _create_named_function_from_string(func_str: str, qoi_name: str, qoi_def:dic
         arg_name = 'mcds'
     
     # Create a restricted namespace with necessary imports and no built-in functions
-    namespace = {'pd': pd, 'np': np, 'len': len, 'sum': sum, 'map': map, '__builtins__': {}}.update(qoi_def)
+    namespace = {'pd': pd, 'np': np, 'len': len, 'sum': sum, 'map': map, '__builtins__': {}}
+    namespace.update(qoi_def)
+    print('BUE namespace:', namespace)
     
     # Evaluate the lambda function once at creation time
     try:
@@ -190,9 +192,9 @@ def recreate_qoi_functions(qoi_functions:dict, qoi_def:dict={}) -> dict:
         Dictionary of recreated QoI functions (keys as names, values as callables)
     """
     recreated_qoi_funcs = {}
-    for qoi_name, qoi_value in qoi_functions.items():
+    for qoi_name, func_str in qoi_functions.items():
         try:
-            recreated_qoi_funcs[qoi_name] = _create_named_function_from_string(qoi_value=qoi_value, qoi_name=qoi_name, qoi_def=qoi_def)
+            recreated_qoi_funcs[qoi_name] = _create_named_function_from_string(qoi_name=qoi_name, func_str=func_str, qoi_def=qoi_def)
         except Exception as e:
             raise ValueError(f"Error recreating QoI function '{qoi_name}': {e}")
     return recreated_qoi_funcs
