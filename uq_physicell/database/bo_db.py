@@ -9,6 +9,12 @@ from uq_physicell import __version__ as uq_physicell_version
 from pcdl import __version__ as pcdl_version
 
 try:
+    from botorch import __version__ as botorch_version
+except ImportError:
+    botorch_version = "Not installed"
+    warnings.warn("Botorch is not available. Some features may be limited.")
+
+try:
     import torch
 except ImportError:
     torch = None
@@ -16,7 +22,6 @@ except ImportError:
 
 if TYPE_CHECKING:
     from botorch.models.model_list_gp_regression import ModelListGP
-    from botorch import __version__ as botorch_version
 else:
     ModelListGP = Any
 
@@ -128,7 +133,7 @@ def insert_metadata(db_path:str, metadata:dict):
         cursor = conn.cursor()
         cursor.execute("""
             INSERT OR REPLACE INTO Metadata (BO_Method, ObsData_Path, Ini_File_Path, StructureName, uq_physicell_version, pcdl_version, botorch_version)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (metadata['BO_Method'], 
               metadata['ObsData_Path'], 
               metadata['Ini_File_Path'], 
