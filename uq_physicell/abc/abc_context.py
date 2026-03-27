@@ -16,7 +16,7 @@ from dask.distributed import Client, get_worker
 
 # UQ PhysiCell imports
 from uq_physicell import PhysiCell_Model
-from uq_physicell.abc.utils import insert_adaptive_weights_db
+from uq_physicell.abc.utils import insert_adaptive_weights_db, insert_metadata_db
 from uq_physicell.utils import run_replicate_serializable
 
 
@@ -430,6 +430,8 @@ class CalibrationContext:
         else:
             self.logger.info(f"Starting calibration: max populations: {self.max_populations}, max simulations: {self.max_simulations}")
             abc_smc.run(max_nr_populations=self.max_populations, max_total_nr_simulations=self.max_simulations)
+        # Add metadata to database
+        insert_metadata_db(self.db_path, self)
         # Add extra info of adaptive distance to database
         if self.adaptive_distance:
             insert_adaptive_weights_db(self.db_path, dict_distances=self.distance_functions, dict_adaptive_weights=load_dict_from_json(self.adaptive_distance_file))
@@ -553,6 +555,7 @@ def run_abc_calibration( calib_context: CalibrationContext) -> History:
                 # Add extra info of adaptive distance to database
                 if calib_context.adaptive_distance:
                     insert_adaptive_weights_db(calib_context.db_path, dict_distances=calib_context.distance_functions, dict_adaptive_weights=load_dict_from_json(calib_context.adaptive_distance_file))
+        
         # Remove temporary file and folders
         physicell_model = PhysiCell_Model(calib_context.model_config['ini_path'], calib_context.model_config['struc_name'])
         physicell_model.remove_io_folders()
