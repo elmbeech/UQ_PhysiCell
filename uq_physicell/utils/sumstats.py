@@ -105,28 +105,46 @@ def safe_call_qoi_function(func: callable, mcds:Union[pcdl.TimeStep,None]=None, 
         Result of the QoI function
     """
     # Check if function has our custom parameter name attribute (from string creation)
-    param_name = func.__param_name__
-    if param_name in ['df_cell', 'df'] and mcds is not None: # Function expects cell dataframe
-        return func(mcds.get_cell_df())
-    elif param_name in ['df_subs'] and mcds is not None: # Function expects substrate dataframe
-        return func(mcds.get_conc_df())
-    elif param_name in ['mcds'] and mcds is not None: # Function expects the mcds object
-        return func(mcds)
-    elif param_name in ['mcds_ts'] and list_mcds is not None: # Function expects the mcds time series object
-        if mcds == list_mcds[-1]: # Ensure we only compute once per time series (last mcds passed)
-            return func(list_mcds)
-        else: return None # Skip computation for other snapshots
-    else:
-        raise ValueError(f"Unknown parameter name '{param_name}' for QoI function.")
-    
-def _create_named_function_from_string(func_str: str, qoi_name: str) -> callable:
+    try:
+        param_name = func.__param_name__
+        if param_name in ['df_cell', 'df'] and mcds is not None: # Function expects cell dataframe
+            return func(mcds.get_cell_df())
+        elif param_name in ['df_subs'] and mcds is not None: # Function expects substrate dataframe
+            return func(mcds.get_conc_df())
+        elif param_name in ['mcds'] and mcds is not None: # Function expects the mcds object
+            return func(mcds)
+        elif param_name in ['mcds_ts'] and list_mcds is not None: # Function expects the mcds time series object
+            if mcds == list_mcds[-1]: # Ensure we only compute once per time series (last mcds passed)
+                return func(list_mcds)
+            else: return None # Skip computation for other snapshots
+        else:
+            raise ValueError(f"Unknown parameter name '{param_name}' for QoI function.")
+    except AttributeError:
+        if mcds is not None: # Function expects the mcds object
+            return func(mcds)
+        elif list_mcds is not None: # Function expects the mcds time series object
+            if mcds == list_mcds[-1]: # Ensure we only compute once per time series (last mcds passed)
+                return func(list_mcds)
+            else: return None # Skip computation for other snapshots
+        else:
+            return func()
+
+def _create_named_function_from_string(qoi_name: str, func_str: str, qoi_def:dict={}) -> callable:
     """
     Dynamically creates a named function from a string.
     
     Args:
-        func_str: The string representation of the function.
         qoi_name: The name of the function to be created.
-    
+        func_str: The string representation of the function.
+        qoi_def (dict): first-class object, that can be used in qoi_functions
+            lambda string, mapped to their name.
+            e.g. for a function definition, if the function definition is:
+            def my_func():
+                print('hello world!')
+                return 0
+            then the qoi_def dict would look like this:
+            {'my_func': my_func}
+
     Returns:
         The created function with preserved parameter inspection capability.
     """
@@ -140,6 +158,7 @@ def _create_named_function_from_string(func_str: str, qoi_name: str) -> callable
     # Create a restricted namespace with necessary imports and no built-in functions.
     namespace = {'pd': pd, 'np': np, 'len': len, 'sum': sum, 'map': map, '__builtins__': {}}
     # Add locally defined QoI helper callables so lambda strings can reference them.
+    namespace.update(qoi_def)
     namespace.update({
         name: obj
         for name, obj in globals().items()
@@ -162,7 +181,7 @@ def _create_named_function_from_string(func_str: str, qoi_name: str) -> callable
     
     return wrapper
 
-def recreate_qoi_functions(qoi_functions: dict) -> dict:
+def recreate_qoi_functions(qoi_functions:dict, qoi_def:dict={}) -> dict:
     """
     Recreate QoI functions from their string representations.
     
@@ -175,14 +194,25 @@ def recreate_qoi_functions(qoi_functions: dict) -> dict:
                     "max_volume": "lambda df: df['total_volume'].max()",
                     "mean_radial_distance": "lambda df: df[['position_x', 'position_y', 'position_z']].apply(lambda row: ((row['position_x']**2 + row['position_y']**2 + row['position_z']**2)**0.5), axis=1).mean()"
                 }
-    
+        qoi_def (dict): first-class object, that can be used in qoi_functions
+            lambda string, mapped to their name.
+            e.g. for a function definition, if the function definition is:
+                def my_func():
+                    print('hello world!')
+                    return 0
+            then the qoi_def dict would look like this:
+                {'my_func': my_func}
+
     Returns:
         Dictionary of recreated QoI functions (keys as names, values as callables)
     """
     recreated_qoi_funcs = {}
-    for qoi_name, qoi_value in qoi_functions.items():
+    for qoi_name, func_str in qoi_functions.items():
         try:
-            recreated_qoi_funcs[qoi_name] = _create_named_function_from_string(qoi_value, qoi_name)
+            if callable(func_str):
+                recreated_qoi_funcs[qoi_name] = func_str
+            else:
+                recreated_qoi_funcs[qoi_name] = _create_named_function_from_string(qoi_name=qoi_name, func_str=func_str, qoi_def=qoi_def)
         except Exception as e:
             raise ValueError(f"Error recreating QoI function '{qoi_name}': {e}")
     return recreated_qoi_funcs

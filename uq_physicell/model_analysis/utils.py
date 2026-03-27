@@ -208,7 +208,7 @@ def mcds_list_to_qoi_df_for_calib(recreated_qoi_funcs, all_sample_ids, chunk_siz
     df_qois = df_qois.reset_index(drop=True)
     return df_qois
 
-def calculate_qoi_from_sa_db(db_file:str, qoi_functions:dict, chunk_size:int=10, mode='sa') -> pd.DataFrame:
+def calculate_qoi_from_sa_db(db_file:str, qoi_functions:dict, qoi_def:dict={}, chunk_size:int=10, mode='sa') -> pd.DataFrame:
     """Calculate quantities of interest from sensitivity analysis database results.
 
     This function loads simulation results from a database in chunks and applies QoI
@@ -219,6 +219,14 @@ def calculate_qoi_from_sa_db(db_file:str, qoi_functions:dict, chunk_size:int=10,
         db_file (str): Path to the SQLite database containing simulation results.
         qoi_functions (dict): Dictionary of QoI functions where keys are QoI names
                            and values are lambda functions or string representations.
+        qoi_def (dict): first-class object, that can be used in qoi_functions
+                        lambda string, mapped to their name.
+                        e.g. for a function definition, if the function definition is:
+                        def my_func():
+                            print('hello world!')
+                            return 0
+                        then the qoi_def dict would look like this:
+                        {'my_func': my_func}
         chunk_size (int, optional): Number of samples to process at a time. Default is 10.
                                    Adjust based on available memory and data size.
         mode:  Specify the form of the result dataframe. Possible modes are
@@ -241,7 +249,7 @@ def calculate_qoi_from_sa_db(db_file:str, qoi_functions:dict, chunk_size:int=10,
     all_sample_ids = sorted(dic_samples.keys())
 
     # Recreate QoI functions from their string representations
-    recreated_qoi_funcs = recreate_qoi_functions(qoi_functions=qoi_functions)
+    recreated_qoi_funcs = recreate_qoi_functions(qoi_functions=qoi_functions, qoi_def=qoi_def)
     if mode == 'sa':
         df_qois = mcds_list_to_qoi_df_for_sa(
             recreated_qoi_funcs=recreated_qoi_funcs,

@@ -24,12 +24,12 @@ class SerializableMockModel:
 
 
 # Create a serializable mock function
-def mock_run_replicate_func(PC_model, sampleID, replicateID, ParametersXML, ParametersRules, qoi_functions=None, return_binary_output=False, drop_columns=[], custom_summary_function=None):
-    return sampleID, replicateID, pickle.dumps({"out1": 1.0, "out2": 2.0})
+def mock_run_replicate_func(PhysiCellModel, sample_id, replicate_id, ParametersXML, ParametersRules, qoi_functions=None, qoi_def={}, return_binary_output=False, drop_columns=[], custom_summary_function=None):
+    return sample_id, replicate_id, pickle.dumps({"out1": 1.0, "out2": 2.0})
 
 
-def mock_run_replicate_serializable_func(PC_model_conf, sampleID, replicateID, ParametersXML, ParametersRules, qoi_functions=None, return_binary_output=False, drop_columns=[], custom_summary_function=None):
-    return sampleID, replicateID, pickle.dumps({"out1": 1.0, "out2": 2.0})
+def mock_run_replicate_serializable_func(PhysiCellModel_conf, sample_id, replicate_id, ParametersXML, ParametersRules, qoi_functions=None, qoi_def={}, return_binary_output=False, drop_columns=[], custom_summary_function=None):
+    return sample_id, replicate_id, pickle.dumps({"out1": 1.0, "out2": 2.0})
 
 
 class TestRunSASimulationsMPI(unittest.TestCase):
