@@ -121,29 +121,44 @@ def mcds_list_to_qoi_df_long(recreated_qoi_funcs, all_sample_ids, chunk_size, db
                         and ReplicateID, with columns for each QoI - columns combined with time points.
     """
     # Process samples in chunks to avoid memory issues
-    ls_column = ['SampleID', 'time', 'ReplicateID'] + sorted(recreated_qoi_funcs.keys())
+    b_column = True
+    ls_column = ['SampleID', 'time', 'ReplicateID']
     llo_data = []
     for i in range(0, len(all_sample_ids), chunk_size):
         chunk_sample_ids = all_sample_ids[i:i + chunk_size]
         # Load only this chunk of data
         df_output = load_output(db_file, sample_ids=chunk_sample_ids, load_data=True)
-        for SampleID in sorted(df_output['SampleID'].unique()):
-            df_sample = df_output[df_output['SampleID'] == SampleID]
+        # Fetch mcds from sample replicate
+        for s_sample in sorted(df_output['SampleID'].unique()):
+            df_sample = df_output[df_output['SampleID'] == s_sample]
             df_qoi_replicate = pd.DataFrame()
-            for ReplicateID in sorted(df_sample['ReplicateID'].unique()):
-                mcds_ts_list = df_sample[df_sample['ReplicateID'] == ReplicateID]['Data'].values[0]
-                # print(f"SampleID: {SampleID}, ReplicateID: {ReplicateID} - mcds_ts_list: {mcds_ts_list}")
-                for mcds in mcds_ts_list:
-                    lo_data = [SampleID, mcds.get_time(), ReplicateID]
+            for s_replicate in sorted(df_sample['ReplicateID'].unique()):
+                l_mcds = df_sample[df_sample['ReplicateID'] == s_replicate]['Data'].values[0]
+                # print(f"SampleID: {s_sample}, ReplicateID: {s_replicate} - mcds_ts_list: {l_mcds}")
+                for mcds in l_mcds:
+                    lo_data = [s_sample, mcds.get_time(), s_replicate]
                     try:
-                        for qoi_name, qoi_func in sorted(recreated_qoi_funcs.items()):
-                            # Store functions the qoi result
-                            function_result = safe_call_qoi_function(qoi_func, mcds=mcds, list_mcds=mcds_ts_list)
-                            lo_data.append(function_result)
+                        for s_qoi_name, o_qoi_func in sorted(recreated_qoi_funcs.items()):
+                            # Execut qoi function on mcds
+                            o_result = safe_call_qoi_function(o_qoi_func, mcds=mcds, list_mcds=l_mcds)
+                            # Save results from multi qoi function
+                            if type(o_result) in {dict, pd.Series}:
+                                for s_key, o_value in sorted(o_result.items()):
+                                    if b_column:
+                                        ls_column.append(f'{s_qoi_name}_{s_key}')
+                                    lo_data.append(o_value)
+                            # Save result from single qoi function
+                            else:
+                                if b_column:
+                                    ls_column.append(s_qoi_name)
+                                lo_data.append(o_result)
+                    # Error handling
                     except Exception as e:
-                        raise RuntimeError(f"Error calculating QoIs for SampleID: {SampleID}, ReplicateID: {ReplicateID} - QoI: {qoi_name}: {e}")
-                    # Store the mcds results
+                        raise RuntimeError(f"Error calculating QoIs for SampleID: {s_sample}, ReplicateID: {s_replicate} - QoI: {s_qoi_name}: {e}")
+                    # Save row
                     llo_data.append(lo_data)
+                    # Update flag
+                    b_column = False
 
     # Gernate data frame
     df_qois = pd.DataFrame(llo_data, columns=ls_column)
@@ -193,7 +208,7 @@ def mcds_list_to_qoi_df_for_calib(recreated_qoi_funcs, all_sample_ids, chunk_siz
     df_qois = df_qois.reset_index(drop=True)
     return df_qois
 
-def calculate_qoi_from_sa_db(db_file: str, qoi_functions: dict, chunk_size: int = 10, mode='sa') -> pd.DataFrame:
+def calculate_qoi_from_sa_db(db_file:str, qoi_functions:dict, chunk_size:int=10, mode='sa') -> pd.DataFrame:
     """Calculate quantities of interest from sensitivity analysis database results.
 
     This function loads simulation results from a database in chunks and applies QoI
@@ -226,7 +241,7 @@ def calculate_qoi_from_sa_db(db_file: str, qoi_functions: dict, chunk_size: int 
     all_sample_ids = sorted(dic_samples.keys())
 
     # Recreate QoI functions from their string representations
-    recreated_qoi_funcs = recreate_qoi_functions(qoi_functions)
+    recreated_qoi_funcs = recreate_qoi_functions(qoi_functions=qoi_functions)
     if mode == 'sa':
         df_qois = mcds_list_to_qoi_df_for_sa(
             recreated_qoi_funcs=recreated_qoi_funcs,
