@@ -145,7 +145,7 @@ def mcds_list_to_qoi_df_long(recreated_qoi_funcs, all_sample_ids, chunk_size, db
                             if type(o_result) in {dict, pd.Series}:
                                 for s_key, o_value in sorted(o_result.items()):
                                     if b_column:
-                                        ls_column.append(f'{s_qoi_name}_{s_key}')
+                                        ls_column.append(f'{s_key}_{s_qoi_name}')
                                     lo_data.append(o_value)
                             # Save result from single qoi function
                             else:
