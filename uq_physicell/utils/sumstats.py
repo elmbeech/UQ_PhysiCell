@@ -107,6 +107,7 @@ def safe_call_qoi_function(func: callable, mcds:Union[pcdl.TimeStep,None]=None, 
     # Check if function has our custom parameter name attribute (from string creation)
     try:
         param_name = func.__param_name__
+        # Handle string defined lambda functions
         if param_name in ['df_cell', 'df'] and mcds is not None: # Function expects cell dataframe
             return func(mcds.get_cell_df())
         elif param_name in ['df_subs'] and mcds is not None: # Function expects substrate dataframe
@@ -116,16 +117,20 @@ def safe_call_qoi_function(func: callable, mcds:Union[pcdl.TimeStep,None]=None, 
         elif param_name in ['mcds_ts'] and list_mcds is not None: # Function expects the mcds time series object
             if mcds == list_mcds[-1]: # Ensure we only compute once per time series (last mcds passed)
                 return func(list_mcds)
-            else: return None # Skip computation for other snapshots
+            else:
+               return None # Skip computation for other snapshots
         else:
             raise ValueError(f"Unknown parameter name '{param_name}' for QoI function.")
+
     except AttributeError:
+        # Handle string defined lambda functions
         if mcds is not None: # Function expects the mcds object
             return func(mcds)
         elif list_mcds is not None: # Function expects the mcds time series object
             if mcds == list_mcds[-1]: # Ensure we only compute once per time series (last mcds passed)
                 return func(list_mcds)
-            else: return None # Skip computation for other snapshots
+            else:
+                return None # Skip computation for other snapshots
         else:
             return func()
 
