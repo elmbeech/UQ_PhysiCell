@@ -57,7 +57,7 @@ def reshape_sa_expanded_data(expanded_data: pd.DataFrame, qoi_columns: list) -> 
     except Exception as e:
         raise ValueError(f"Error reshaping expanded data: {e}")
 
-def mcds_list_to_qoi_df_for_sa(recreated_qoi_funcs, all_sample_ids, chunk_size, db_file) -> pd.DataFrame:
+def mcds_list_to_qoi_df_for_sa(recreated_qoi_funcs, all_sample_ids, chunk_size, db_file, verbose=False) -> pd.DataFrame:
     """Convert a list of MCDS objects to a DataFrame of quantities of interest for sensitivity analysis.
 
     This function processes a list of MCDS simulation results, extracting relevant
@@ -84,7 +84,8 @@ def mcds_list_to_qoi_df_for_sa(recreated_qoi_funcs, all_sample_ids, chunk_size, 
             df_sample = df_output[df_output['SampleID'] == SampleID]
             for ReplicateID in df_sample['ReplicateID'].unique():
                 mcds_ts_list = df_sample[df_sample['ReplicateID'] == ReplicateID]['Data'].values[0]
-                # print(f"SampleID: {SampleID}, ReplicateID: {ReplicateID} - mcds_ts_list: {mcds_ts_list}")
+                if verbose:
+                    print(f"SampleID: {SampleID}, ReplicateID: {ReplicateID} - mcds_ts_list: {mcds_ts_list}")
                 data = {'SampleID': SampleID, 'ReplicateID': ReplicateID}
                 for id_time, mcds in enumerate(mcds_ts_list):
                     data[f"time_{id_time}"] = mcds.get_time()
@@ -103,7 +104,7 @@ def mcds_list_to_qoi_df_for_sa(recreated_qoi_funcs, all_sample_ids, chunk_size, 
     df_qois = df_qois.reset_index(drop=True)
     return df_qois
 
-def mcds_list_to_qoi_df_long(recreated_qoi_funcs, all_sample_ids, chunk_size, db_file) -> pd.DataFrame:
+def mcds_list_to_qoi_df_long(recreated_qoi_funcs, all_sample_ids, chunk_size, db_file, verbose=False) -> pd.DataFrame:
     """Convert a list of MCDS objects to a DataFrame  of quantities of interest in long format.
 
     This function processes a list of MCDS simulation results, extracting relevant
@@ -134,11 +135,12 @@ def mcds_list_to_qoi_df_long(recreated_qoi_funcs, all_sample_ids, chunk_size, db
             df_qoi_replicate = pd.DataFrame()
             for s_replicate in sorted(df_sample['ReplicateID'].unique()):
                 l_mcds = df_sample[df_sample['ReplicateID'] == s_replicate]['Data'].values[0]
-                # print(f"SampleID: {s_sample}, ReplicateID: {s_replicate} - mcds_ts_list: {l_mcds}")
                 for mcds in l_mcds:
                     lo_data = [s_sample, mcds.get_time(), s_replicate]
                     try:
                         for s_qoi_name, o_qoi_func in sorted(recreated_qoi_funcs.items()):
+                            if verbose:
+                                print(f"processing sample replicate qoi: {s_sample} {s_replicate} {s_qoi_name} ...")
                             # Execut qoi function on mcds
                             o_result = safe_call_qoi_function(o_qoi_func, mcds=mcds, list_mcds=l_mcds)
                             # Save results from multi qoi function
@@ -165,7 +167,7 @@ def mcds_list_to_qoi_df_long(recreated_qoi_funcs, all_sample_ids, chunk_size, db
     df_qois = df_qois.sort_values(['SampleID','time','ReplicateID'], ignore_index=True)
     return df_qois
 
-def mcds_list_to_qoi_df_for_calib(recreated_qoi_funcs, all_sample_ids, chunk_size, db_file) -> pd.DataFrame:
+def mcds_list_to_qoi_df_for_calib(recreated_qoi_funcs, all_sample_ids, chunk_size, db_file, verbose=False) -> pd.DataFrame:
     """Convert a list of MCDS objects to a DataFrame of quantities of interest for calibration.
 
     This function processes a list of MCDS simulation results, extracting relevant
@@ -208,7 +210,7 @@ def mcds_list_to_qoi_df_for_calib(recreated_qoi_funcs, all_sample_ids, chunk_siz
     df_qois = df_qois.reset_index(drop=True)
     return df_qois
 
-def calculate_qoi_from_sa_db(db_file:str, qoi_functions:dict, qoi_def:dict={}, chunk_size:int=10, mode='sa') -> pd.DataFrame:
+def calculate_qoi_from_sa_db(db_file:str, qoi_functions:dict, qoi_def:dict={}, chunk_size:int=10, mode='sa', verbose=False) -> pd.DataFrame:
     """Calculate quantities of interest from sensitivity analysis database results.
 
     This function loads simulation results from a database in chunks and applies QoI
@@ -255,21 +257,24 @@ def calculate_qoi_from_sa_db(db_file:str, qoi_functions:dict, qoi_def:dict={}, c
             recreated_qoi_funcs=recreated_qoi_funcs,
             all_sample_ids=all_sample_ids,
             chunk_size=chunk_size,
-            db_file=db_file
+            db_file=db_file,
+            verbose=verbose,
         )
     elif mode == 'calib':
         df_qois = mcds_list_to_qoi_df_for_calib(
             recreated_qoi_funcs=recreated_qoi_funcs,
             all_sample_ids=all_sample_ids,
             chunk_size=chunk_size,
-            db_file=db_file
+            db_file=db_file,
+            verbose=verbose,
         )
     elif mode == 'long':
         df_qois = mcds_list_to_qoi_df_long(
             recreated_qoi_funcs=recreated_qoi_funcs,
             all_sample_ids=all_sample_ids,
             chunk_size=chunk_size,
-            db_file=db_file
+            db_file=db_file,
+            verbose=verbose,
         )
     else:
         raise ValueError(f"Unknown mode '{mode}'. Supported modes are 'sa' and 'calib'.")
