@@ -132,7 +132,6 @@ def mcds_list_to_qoi_df_long(recreated_qoi_funcs, all_sample_ids, chunk_size, db
         # Fetch mcds from sample replicate
         for s_sample in sorted(df_output['SampleID'].unique()):
             df_sample = df_output[df_output['SampleID'] == s_sample]
-            df_qoi_replicate = pd.DataFrame()
             for s_replicate in sorted(df_sample['ReplicateID'].unique()):
                 l_mcds = df_sample[df_sample['ReplicateID'] == s_replicate]['Data'].values[0]
                 for mcds in l_mcds:
@@ -161,7 +160,10 @@ def mcds_list_to_qoi_df_long(recreated_qoi_funcs, all_sample_ids, chunk_size, db
                     llo_data.append(lo_data)
                     # Update flag
                     b_column = False
-
+        # Explicitely free memory
+        del l_mcds
+        del df_sample
+        del df_output
     # Gernate data frame
     df_qois = pd.DataFrame(llo_data, columns=ls_column)
     df_qois = df_qois.sort_values(['SampleID','time','ReplicateID'], ignore_index=True)
