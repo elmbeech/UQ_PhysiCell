@@ -100,7 +100,11 @@ def mcds_list_to_qoi_df_for_sa(recreated_qoi_funcs, all_sample_ids, chunk_size, 
                 # Store the data in a DataFrame
                 df_qoi_replicate = pd.DataFrame({key: [value] for key, value in data.items()})
                 df_qois = pd.concat([df_qois, df_qoi_replicate], ignore_index=True)
-
+        # Explicitely free memory
+        del mcds_ts_list
+        del df_sample
+        del df_output
+    # Reset index of the final DataFrame
     df_qois = df_qois.reset_index(drop=True)
     return df_qois
 
@@ -164,7 +168,7 @@ def mcds_list_to_qoi_df_long(recreated_qoi_funcs, all_sample_ids, chunk_size, db
         del l_mcds
         del df_sample
         del df_output
-    # Gernate data frame
+    # Generate data frame
     df_qois = pd.DataFrame(llo_data, columns=ls_column)
     df_qois = df_qois.sort_values(['SampleID','time','ReplicateID'], ignore_index=True)
     return df_qois
@@ -201,6 +205,8 @@ def mcds_list_to_qoi_df_for_calib(recreated_qoi_funcs, all_sample_ids, chunk_siz
                     try:
                         for qoi_name, qoi_func in recreated_qoi_funcs.items():
                             function_result = safe_call_qoi_function(qoi_func, mcds=mcds, list_mcds=mcds_ts_list)
+                            if verbose:
+                                print(f"processing sample replicate qoi: {SampleID} {ReplicateID} {qoi_name} ...")
                             if function_result is not None:
                                 data[qoi_name] = function_result
                         if len(data) == 3: continue  # Skip if no QoI data was computed
@@ -209,6 +215,11 @@ def mcds_list_to_qoi_df_for_calib(recreated_qoi_funcs, all_sample_ids, chunk_siz
                     # Store the data in a DataFrame
                     df_qoi_replicate = pd.DataFrame({key: [value] for key, value in data.items()})
                     df_qois = pd.concat([df_qois, df_qoi_replicate], ignore_index=True)
+        # Explicitely free memory
+        del mcds_ts_list
+        del df_sample
+        del df_output
+    # Reset index of the final DataFrame
     df_qois = df_qois.reset_index(drop=True)
     return df_qois
 
