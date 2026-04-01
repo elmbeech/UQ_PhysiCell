@@ -50,6 +50,7 @@ from uq_physicell.database.ma_db import (
 )
 from uq_physicell.model_analysis.utils import calculate_qoi_from_sa_db
 from ..utils.model_wrapper import run_replicate_serializable
+from ..utils.sumstats import _convert_qoi_function_to_string
 from ..utils.distances import SumSquaredDifferences
 from ..database.bo_db import (
     create_structure, insert_metadata, insert_param_space, insert_qois, 
@@ -95,7 +96,8 @@ class CalibrationContext:
         # Core configuration
         self.db_path = db_path
         self.model_config = model_config
-        self.qoi_functions = qoi_functions
+        # QOI_FUNCTIONS MUST BE STRINGS, BECAUSE THEY NEED TO BE SERIALIZABLE TO BE SAVED IN THE DATABASE AND USED IN THE DEFAULT AGGREGATION FUNCTION.
+        self.qoi_functions = {key: _convert_qoi_function_to_string(value, key) if not isinstance(value, str) else value for key, value in qoi_functions.items()}
         self.qoi_def = qoi_def
         self.distance_functions = distance_functions
         self.search_space = search_space
@@ -1236,7 +1238,10 @@ def run_bayesian_optimization(calib_context: CalibrationContext, additional_iter
         physicell_model.remove_io_folders()
         
     except Exception as e:
-        logger.error(f"❌ Error during Bayesian optimization: {e}")
+        if resume_from_db:
+            logger.error(f"❌ Error during Bayesian optimization (resuming from DB):  {e} \nTO AVOID CONFLICT, DEFINE A NEW DATA BASE NAME OR REMOVE THE EXISTING ONE!")
+        else:
+            logger.error(f"❌ Error during Bayesian optimization: {e}")
         raise
 
 
