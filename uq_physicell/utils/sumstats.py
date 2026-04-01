@@ -4,6 +4,8 @@ import pandas as pd
 from shutil import rmtree
 from typing import Union
 import re
+import inspect, ast
+import textwrap
     
 def summ_func_FinalPopLiveDead(outputPath:str,summaryFile:Union[str,None], dic_params:dict, SampleID:int, ReplicateID:int) -> Union[pd.DataFrame,None]:
     """
@@ -104,36 +106,95 @@ def safe_call_qoi_function(func: callable, mcds:Union[pcdl.TimeStep,None]=None, 
     Returns:
         Result of the QoI function
     """
-    # Check if function has our custom parameter name attribute (from string creation)
-    try:
-        param_name = func.__param_name__
-        # Handle string defined lambda functions
-        if param_name in ['df_cell', 'df'] and mcds is not None: # Function expects cell dataframe
-            return func(mcds.get_cell_df())
-        elif param_name in ['df_subs'] and mcds is not None: # Function expects substrate dataframe
-            return func(mcds.get_conc_df())
-        elif param_name in ['mcds'] and mcds is not None: # Function expects the mcds object
-            return func(mcds)
-        elif param_name in ['mcds_ts'] and list_mcds is not None: # Function expects the mcds time series object
-            if mcds == list_mcds[-1]: # Ensure we only compute once per time series (last mcds passed)
-                return func(list_mcds)
-            else:
-               return None # Skip computation for other snapshots
-        else:
-            raise ValueError(f"Unknown parameter name '{param_name}' for QoI function.")
+    # Require stored metadata for dispatch.
+    param_name = getattr(func, '__param_name__', None)
 
-    except AttributeError:
-        # Handle string defined lambda functions
-        if mcds is not None: # Function expects the mcds object
-            return func(mcds)
-        elif list_mcds is not None: # Function expects the mcds time series object
-            if mcds == list_mcds[-1]: # Ensure we only compute once per time series (last mcds passed)
-                return func(list_mcds)
-            else:
-                return None # Skip computation for other snapshots
+    # Reject non-wrapped callables (no __param_name__ attribute).
+    if param_name is None:
+        raise ValueError(
+            "QoI function is missing required '__param_name__' metadata. "
+            "Wrap callables with _create_wrapper_for_qoi_function or recreate_qoi_functions first."
+        )
+    
+    # Handle wrapped/string-defined QoI functions.
+    if param_name in ['df_cell', 'df'] and mcds is not None: # Function expects cell dataframe
+        return func(mcds.get_cell_df())
+    elif param_name in ['df_subs'] and mcds is not None: # Function expects substrate dataframe
+        return func(mcds.get_conc_df())
+    elif param_name in ['mcds'] and mcds is not None: # Function expects the mcds object
+        return func(mcds)
+    elif param_name in ['mcds_ts'] and list_mcds is not None: # Function expects the mcds time series object
+        if mcds == list_mcds[-1]: # Ensure we only compute once per time series (last mcds passed)
+            return func(list_mcds)
         else:
-            return func()
+            return None # Skip computation for other snapshots
 
+    raise ValueError(
+        f"Could not call QoI function with param_name='{param_name}', "
+        f"mcds provided={mcds is not None}, list_mcds provided={list_mcds is not None}."
+    )
+
+def _create_wrapper_for_qoi_function(func: callable, param_name: str, qoi_name: str) -> callable:
+    """
+    Create a wrapper function for a QoI function that preserves parameter inspection capability.
+    
+    Args:
+        func: The original QoI function to wrap
+        param_name: The name of the parameter that the function expects (e.g., 'df_cell', 'df_subs', 'mcds', 'mcds_ts')
+        qoi_name: The name of the QoI function (used for setting the wrapper's __name__)
+    """
+    # Create a wrapper function that calls the pre-compiled lambda
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    
+    # Store the original parameter name as an attribute for inspection
+    wrapper.__param_name__ = param_name
+    wrapper.__name__ = qoi_name
+    
+    return wrapper
+
+def _extract_lambda_source(func):
+    source = textwrap.dedent(inspect.getsource(func))
+    lambda_index = source.find("lambda")
+    if lambda_index == -1:
+        raise ValueError("No lambda expression found")
+
+    candidate = source[lambda_index:].strip()
+
+    # Try progressively shorter suffixes until the lambda expression parses.
+    # This handles trailing commas and surrounding syntax from dict literals,
+    # calls, or other enclosing expressions.
+    for end in range(len(candidate), 0, -1):
+        snippet = candidate[:end].rstrip()
+        if not snippet:
+            continue
+
+        try:
+            tree = ast.parse(f"({snippet})", mode="eval")
+        except SyntaxError:
+            continue
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Lambda):
+                extracted = ast.get_source_segment(f"({snippet})", node)
+                if extracted:
+                    return extracted
+
+    raise ValueError("No lambda expression found")
+
+def _convert_qoi_function_to_string(qoi_func: callable, qoi_name:str):
+    """
+    Convert a callable QoI function to its source code string representation.
+    Args:
+        qoi_func: The QoI function to convert (must be a callable)
+        qoi_name: The name of the QoI function (used for error messages)
+    """
+    # Check if the qoi_func is a callable function converted to string
+    if callable(qoi_func):
+        return _extract_lambda_source(qoi_func)
+    else:
+        raise ValueError(f"QoI function for '{qoi_name}' is not callable.")
+        
 def _create_named_function_from_string(qoi_name: str, func_str: str, qoi_def:dict={}) -> callable:
     """
     Dynamically creates a named function from a string.
@@ -177,12 +238,7 @@ def _create_named_function_from_string(qoi_name: str, func_str: str, qoi_def:dic
         raise ValueError(f"Error evaluating QoI function string '{func_str}': {e}")
     
     # Create a wrapper function that calls the pre-compiled lambda
-    def wrapper(*args, **kwargs):
-        return compiled_func(*args, **kwargs)
-    
-    # Store the original parameter name as an attribute for inspection
-    wrapper.__param_name__ = arg_name
-    wrapper.__name__ = qoi_name
+    wrapper = _create_wrapper_for_qoi_function(func=compiled_func, param_name=arg_name, qoi_name=qoi_name)
     
     return wrapper
 
@@ -215,7 +271,9 @@ def recreate_qoi_functions(qoi_functions:dict, qoi_def:dict={}) -> dict:
     for qoi_name, func_str in qoi_functions.items():
         try:
             if callable(func_str):
-                recreated_qoi_funcs[qoi_name] = func_str
+                signature = inspect.signature(func_str)
+                param_name = list(dict(signature.parameters).keys())[0] 
+                recreated_qoi_funcs[qoi_name] = _create_wrapper_for_qoi_function(func=func_str, param_name=param_name, qoi_name=qoi_name)
             else:
                 recreated_qoi_funcs[qoi_name] = _create_named_function_from_string(qoi_name=qoi_name, func_str=func_str, qoi_def=qoi_def)
         except Exception as e:
