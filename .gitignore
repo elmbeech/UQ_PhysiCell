@@ -19,6 +19,7 @@ examples/epi_caf_invasion/UQ_PC_OutputFolder/*
 examples/epi_caf_invasion/*.svg
 ALL_CITATIONS.txt
 *.pyc
+*.parquet
 *.db
 *.db-shm
 *.db-wal
