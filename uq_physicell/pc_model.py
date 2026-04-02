@@ -109,17 +109,27 @@ class PhysiCell_Model:
                 _get_xml_element_value(self.xml_ref_root, param_key)
             except ValueError as e:
                 raise ValueError(f"Error in parameters_xml. {e}")
+        # Define the format of rules file if not defined in .ini file
+        self.RULES_Format = _get_xml_element_value(self.xml_ref_root, './/cell_rules/rulesets/ruleset/[@format]') # .csv or .xml'
+        if self.RULES_name.endswith('.csv') and self.RULES_Format != 'csv':
+            # Rewrite the extension of rules file to match the format defined in the reference XML file
+            self.RULES_name = self.RULES_name[:-4] + f'.{self.RULES_Format}'
 
     def _load_rules_reference(self) -> None:
-        self.default_rules = _get_rules(self.RULES_RefPath) if self.RULES_RefPath else None
         if self.verbose:
             print(f"\t\t>> Checking parameters in RULES file ...")
-        for param_key in self.parameters_rules.keys():
-            try:
-                _get_rule_index_in_csv(self.default_rules, param_key)
-            except ValueError as e:
-                raise ValueError(f"Error in parameters_rules. {e}")
-
+        if self.RULES_Format == 'csv':
+            self.default_rules = _get_rules(self.RULES_RefPath) if self.RULES_RefPath else None
+            for param_key in self.parameters_rules.keys():
+                try:
+                    _get_rule_index_in_csv(self.default_rules, param_key)
+                except ValueError as e:
+                    raise ValueError(f"Error in parameters_rules. {e}")
+        elif self.RULES_Format == 'xml':
+            self.default_rules = None
+        else:
+            raise ValueError(f"Error in rules file format! {self.RULES_Format} is not supported, only 'csv' and 'xml' are supported.")
+        
     def _get_xml_path(self, sampleID: int, replicateID: int) -> str:
         filePath = self.input_folder + self.XML_name % (sampleID, replicateID)
         os.makedirs(os.path.dirname(self.input_folder), exist_ok=True)
@@ -351,25 +361,38 @@ def _setup_model_input(model: PhysiCell_Model, SampleID: int, ReplicateID: int, 
             print(f"\t\t\t>>> Setting up rules input ...")
         dic_xml_parameters['.//cell_rules/rulesets/ruleset/folder'] = model.input_folder
         dic_xml_parameters['.//cell_rules/rulesets/ruleset/filename'] = model._get_rules_fileName(SampleID, ReplicateID)
-        csvFile_out = model.input_folder + model._get_rules_fileName(SampleID, ReplicateID)
+        RuleFile_out = model.input_folder + model._get_rules_fileName(SampleID, ReplicateID)
         dic_rules_temp = {}
-        for idx, param_key, param_name in zip(range(len(model.parameters_rules_variable)), model.parameters_rules_variable.keys(), model.parameters_rules_variable.values()):
-            single_param_rule = param_key.split(",")[-1]
-            if isinstance(parameters_rules_input, dict):
-                dic_rules_temp[idx] = [parameters_rules_input[param_name], param_key, single_param_rule]
-            else:
-                dic_rules_temp[idx] = [parameters_rules_input[idx], param_key, single_param_rule]
-        for idx, param_key in enumerate(model.parameters_rules_fixed.keys()):
-            single_param_rule = param_key.split(",")[-1]
-            dic_rules_temp[idx + len(model.parameters_rules_variable)] = [float(model.parameters_rules_fixed[param_key]), param_key, single_param_rule]
+        if model.RULES_Format == 'csv':
+            for idx, param_key, param_name in zip(range(len(model.parameters_rules_variable)), model.parameters_rules_variable.keys(), model.parameters_rules_variable.values()):
+                single_param_rule = param_key.split(",")[-1]
+                if isinstance(parameters_rules_input, dict):
+                    dic_rules_temp[idx] = [parameters_rules_input[param_name], param_key, single_param_rule]
+                else:
+                    dic_rules_temp[idx] = [parameters_rules_input[idx], param_key, single_param_rule]
+            for idx, param_key in enumerate(model.parameters_rules_fixed.keys()):
+                single_param_rule = param_key.split(",")[-1]
+                dic_rules_temp[idx + len(model.parameters_rules_variable)] = [float(model.parameters_rules_fixed[param_key]), param_key, single_param_rule]
+        else: # xml format
+            dic_rules_temp = model.parameters_rules_fixed.copy()
+            for param_key, param_name in model.parameters_rules_variable.items():
+                if isinstance(parameters_rules_input, dict):
+                    dic_rules_temp[param_key] = parameters_rules_input[param_name]
+                else:
+                    dic_rules_temp[param_key] = parameters_rules_input[idx]
+            for param_key in model.parameters_rules_fixed.keys():
+                dic_rules_temp[param_key] = float(model.parameters_rules_fixed[param_key])
         if model.verbose:
             # Use relative path for privacy
-            rel_csvFile_out = os.path.relpath(csvFile_out, os.getcwd())
-            print(f"\t\t\t>>> Generating rules file {rel_csvFile_out} ...")
+            rel_RuleFile_out = os.path.relpath(RuleFile_out, os.getcwd())
+            print(f"\t\t\t>>> Generating rules file {rel_RuleFile_out} ...")
         try:
-            _generate_csv_file(model.default_rules, csvFile_out, dic_rules_temp)
+            if model.RULES_Format == 'csv':
+                _generate_csv_file(model.default_rules, RuleFile_out, dic_rules_temp)
+            else:
+                _generate_xml_file(pathlib.Path(model.RULES_RefPath), pathlib.Path(RuleFile_out), dic_rules_temp, model.timeout_writeXML_sec)
         except ValueError as e:
-            raise ValueError(f"Error in generating rules file! {e}")
+            raise ValueError(f"Error in generating rules file {RuleFile_out}! {e}")
 
     if model.verbose:
         print(f"\t\t\t>>> Setting up XML input...")
@@ -478,9 +501,25 @@ def _run_model(model: PhysiCell_Model, SampleID: int, ReplicateID: int, Paramete
     except Exception as e:
         raise ValueError(f"An unexpected error occurred in RunModel: {e}")
 
-_attr_name_re = re.compile(r"\[@([A-Za-z_:][\w:.\-]*)")
+_xml_target_attr_re = re.compile(r"/(?:\[@([A-Za-z_:][\w:.\-]*)\]|@([A-Za-z_:][\w:.\-]*))$")
+
+def _split_xml_key_target(key: str) -> tuple[str, Union[str, None]]:
+    """Split an XML key into element selector and optional target attribute.
+
+    Supported attribute-target suffixes:
+      - /[@attr]   (legacy style kept for backward compatibility)
+      - /@attr     (preferred style)
+    """
+    match = _xml_target_attr_re.search(key)
+    if not match:
+        return key, None
+    attr_name = match.group(1) or match.group(2)
+    element_key = key[:match.start()]
+    return element_key, attr_name
+
 def _get_xml_element_value(xml_root: ET.Element, key: str) -> str:
-    elems = xml_root.findall(key)
+    element_key, target_attr = _split_xml_key_target(key)
+    elems = xml_root.findall(element_key)
     if len(elems) != 1:
         raise ValueError(f""" Error in getting XML element!
                 Multiples occurrences or none found to this key: {key}, occurrences: {[pos.text for pos in elems]}.
@@ -488,18 +527,16 @@ def _get_xml_element_value(xml_root: ET.Element, key: str) -> str:
                 # key cell cycle example: ".//*[@name='CD8 Tcell']/phenotype/cycle/phase_transition_rates/rate[4]"
                 # key substrates example: ".//*[@name='TNF']/physical_parameter_set/diffusion_coefficient"
                 # key parameter example: ".//random_seed"
+                # key to attribute example: ".//cell_rules/rulesets/ruleset/@format"
                 """)
-    # Get last segment of the key to extract the attribute name
-    last_seg = key.rsplit("/", 1)[-1]
-    # Check and extract the attribute name using regex
-    attribute = _attr_name_re.search(last_seg)
     elem = elems[0]
-    if attribute:
-        return elem.get(attribute.group(1))
+    if target_attr:
+        return elem.get(target_attr)
     return elem.text
 
 def _set_xml_element_value(xml_root: ET.Element, key: str, val: Union[str, int, float]) -> None:
-    elems = xml_root.findall(key)
+    element_key, target_attr = _split_xml_key_target(key)
+    elems = xml_root.findall(element_key)
     if len(elems) != 1:
         raise ValueError(f""" Error in setting XML element!
                 Multiples occurrences or none found to this key: {key}, occurrences: {[pos.text for pos in elems]}.
@@ -507,17 +544,11 @@ def _set_xml_element_value(xml_root: ET.Element, key: str, val: Union[str, int, 
                 # key cell cycle example: ".//*[@name='CD8 Tcell']/phenotype/cycle/phase_transition_rates/rate[4]"
                 # key substrates example: ".//*[@name='TNF']/physical_parameter_set/diffusion_coefficient"
                 # key parameter example: ".//random_seed"
-                # key to attribute .//microenvironment_setup/variable[@name='substrate']/Dirichlet_options/boundary_value[@ID='xmin']/[@enabled]
+                # key to attribute example: .//microenvironment_setup/variable[@name='substrate']/Dirichlet_options/boundary_value[@ID='xmin']/@enabled
                 """)
-    # Get last segment of the key to extract the attribute name
-    last_seg = key.rsplit("/", 1)[-1]
-    # Check and extract the attribute name using regex
-    attribute = _attr_name_re.search(last_seg)
     elem = elems[0]
-    if last_seg.startswith('boundary_value[@ID'):
-        attribute = False
-    if attribute:
-        elem.set(attribute.group(1), str(val))
+    if target_attr:
+        elem.set(target_attr, str(val))
     else:
         elem.text = str(val)
 
