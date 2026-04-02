@@ -18,6 +18,7 @@ from dask.distributed import Client, get_worker
 from uq_physicell import PhysiCell_Model
 from uq_physicell.abc.utils import insert_adaptive_weights_db, insert_metadata_db
 from uq_physicell.utils import run_replicate_serializable
+from ..utils.sumstats import _convert_qoi_function_to_string
 
 
 class CalibrationContext:
@@ -58,7 +59,8 @@ class CalibrationContext:
         # Core configuration
         self.db_path = db_path
         self.model_config = model_config
-        self.qoi_functions = qoi_functions
+        # QOI_FUNCTIONS MUST BE STRINGS, BECAUSE THEY NEED TO BE SERIALIZABLE TO BE SAVED IN THE DATABASE AND USED IN THE DEFAULT AGGREGATION FUNCTION.
+        self.qoi_functions = {key: _convert_qoi_function_to_string(value, key) if not isinstance(value, str) else value for key, value in qoi_functions.items()}
         self.qoi_def = qoi_def
         self.distance_functions = distance_functions
         self.prior = prior
