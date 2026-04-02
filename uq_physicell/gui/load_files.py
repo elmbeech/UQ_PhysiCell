@@ -8,6 +8,18 @@ from PyQt5.QtWidgets import QFileDialog, QInputDialog
 
 from ..database.ma_db import get_database_type
 
+
+def _get_rules_format_from_xml(main_window):
+    try:
+        ruleset = main_window.xml_tree.find(".//cell_rules/rulesets/ruleset")
+        if ruleset is not None and ruleset.get("format"):
+            return ruleset.get("format").strip().lower()
+    except Exception:
+        pass
+    if hasattr(main_window, "rule_path") and main_window.rule_path:
+        return os.path.splitext(main_window.rule_path)[1].lstrip(".").lower()
+    return "csv"
+
 def load_xml_file(main_window, filePath=None):
      # Clear parameters, .ini File Preview, and output
     main_window.analysis_parameters.clear()
@@ -29,9 +41,14 @@ def load_xml_file(main_window, filePath=None):
             # Parse XML file
             main_window.xml_tree = ET.parse(main_window.xml_file_path).getroot()
             # Define the path to the rules CSV file
-            folder_path = main_window.xml_file_path.rsplit("/", 1)[0]  # Get the folder path of the XML file
-            filename = main_window.xml_tree.find(".//cell_rules/rulesets/ruleset/filename").text.strip()
+            folder_path = os.path.dirname(main_window.xml_file_path)  # Get the folder path of the XML file
+            if not folder_path:
+                folder_path = "."
+            # Try to get filename from XML, fall back to cell_rules.csv
+            filename_elem = main_window.xml_tree.find(".//cell_rules/rulesets/ruleset/filename")
+            filename = filename_elem.text.strip() if filename_elem is not None else "cell_rules.csv"
             main_window.rule_path = os.path.join(folder_path, filename)  # Initialize rule path
+            main_window.rules_format = _get_rules_format_from_xml(main_window)
             # Build parent-child mapping
             main_window.parent_map = {child: parent for parent in main_window.xml_tree.iter() for child in parent}
             # Clear existing combo boxes
@@ -47,30 +64,38 @@ def load_xml_file(main_window, filePath=None):
             main_window.clear_combo_boxes(main_window)
             main_window.update_output_tab1(main_window, f"Error loading XML: {e}")
 
-def load_csv_file(main_window):
-    # Toggle between loading and unloading the rules CSV
-    if main_window.load_rules_button.text() == "Unload Rules CSV":
+def load_rules_file(main_window):
+    # Toggle between loading and unloading the rules file
+    rules_format = getattr(main_window, "rules_format", _get_rules_format_from_xml(main_window)).lower()
+    if main_window.load_rules_button.text() == "Unload Rules":
         # Unload the rules widgets
         main_window.clear_rule_section(main_window)  # Clear the rule section
-        main_window.load_rules_button.setText("Load Rules CSV")
-        main_window.update_output_tab1(main_window, "Unloaded rules CSV.")
+        main_window.load_rules_button.setText("Load Rules")
+        main_window.update_output_tab1(main_window, "Unloaded rules.")
     else:
-        # Load the rules CSV
+        # Load the rules file
         try:
             if os.path.exists(main_window.rule_path):
-                # Predefine column names
-                column_names = ["cell", "signal", "direction", "behavior", "saturation", "half-max", "hill-power", "apply-dead"]
-                main_window.csv_data = pd.read_csv(main_window.rule_path, names=column_names, header=None)
-                # Add 'inactive' column as False by default - All rules in the CSV are active
-                main_window.csv_data['inactive'] = 'false'
-                # print(main_window.csv_data)
-                main_window.update_output_tab1(main_window, f"Loaded CSV file: {main_window.rule_path}")
+                main_window.rules_format = rules_format
+                if rules_format == "csv":
+                    # Predefine column names
+                    column_names = ["cell_type", "signal", "direction", "behavior", "saturation", "half_max", "hill_power", "dead"]
+                    main_window.csv_data = pd.read_csv(main_window.rule_path, names=column_names, header=None)
+                    # Add 'inactive' column as False by default - All rules are active by default
+                    main_window.csv_data['inactive'] = 'false'
+                    main_window.update_output_tab1(main_window, f"Loaded CSV rules file: {main_window.rule_path}")
+                elif rules_format == "xml":
+                    main_window.rules_tree = ET.parse(main_window.rule_path).getroot()
+                    main_window.rule_parent_map = {child: parent for parent in main_window.rules_tree.iter() for child in parent}
+                    main_window.update_output_tab1(main_window, f"Loaded XML rules file: {main_window.rule_path}")
+                else:
+                    raise ValueError(f"Unsupported rules format: {rules_format}")
                 main_window.create_rule_section(main_window)  # Create the rules section
-                main_window.load_rules_button.setText("Unload Rules CSV")
+                main_window.load_rules_button.setText("Unload Rules")
             else:
-                main_window.update_output_tab1(main_window, f"Error: CSV file not found at {main_window.rule_path}")
+                main_window.update_output_tab1(main_window, f"Error: rules file not found at {main_window.rule_path}")
         except Exception as e:
-            main_window.update_output_tab1(main_window, f"Error loading CSV file: {e}")
+            main_window.update_output_tab1(main_window, f"Error loading rules file: {e}")
 
 def update_rules_file(main_window):
     # Update the rules file path based on the selected folder and filename
@@ -79,7 +104,9 @@ def update_rules_file(main_window):
         if ".//cell_rules/rulesets/ruleset/folder" in main_window.fixed_parameters.keys():
             folder_path = main_window.fixed_parameters[".//cell_rules/rulesets/ruleset/folder"]
         else:
-            folder_path = folder_path = main_window.xml_file_path.rsplit("/", 1)[0]  # Get the folder path of the XML file
+            folder_path = os.path.dirname(main_window.xml_file_path)  # Get the folder path of the XML file
+            if not folder_path:
+                folder_path = "."
         # Check if filename is already set in fixed_parameters, else use the XML
         if ".//cell_rules/rulesets/ruleset/filename" in main_window.fixed_parameters.keys():
             filename = main_window.fixed_parameters[".//cell_rules/rulesets/ruleset/filename"]
@@ -146,11 +173,12 @@ def load_ini_file(main_window, filePath=None, strucName=None):
             main_window.load_xml_file(main_window, config[struc_name]['configFile_ref'])
 
             # Add the loaded parameters to dictionaries
-            for key, value in eval(config[struc_name]['parameters']).items():
-                if isinstance(value, list):
-                    main_window.analysis_parameters[key] = value
-                else:
-                    main_window.fixed_parameters[key] = value
+            if 'parameters' in config[struc_name].keys():
+                for key, value in eval(config[struc_name]['parameters']).items():
+                    if isinstance(value, list):
+                        main_window.analysis_parameters[key] = value
+                    else:
+                        main_window.fixed_parameters[key] = value
 
             # Check if rules file exists in the fixed parameters from .ini file
             if ".//cell_rules/rulesets/ruleset/filename" in main_window.fixed_parameters.keys():
@@ -159,13 +187,13 @@ def load_ini_file(main_window, filePath=None, strucName=None):
             # Extract the rule file path if it exists
             if 'rulesFile_ref' in config[struc_name].keys():
                 main_window.rule_path = config[struc_name]['rulesFile_ref']
-                main_window.load_csv_file(main_window) # load the rules CSV file
-                main_window.load_csv_file(main_window) # the rules section in the tab
-                for key, value in eval(config[struc_name]['parameters_rules']).items():
-                    if isinstance(value, list):
-                        main_window.analysis_rules_parameters[key] = value
-                    else:
-                        main_window.fixed_rules_parameters[key] = value
+                main_window.load_rules_file(main_window) # load the rules file and build the UI
+                if 'parameters_rules' in config[struc_name].keys():
+                    for key, value in eval(config[struc_name]['parameters_rules']).items():
+                        if isinstance(value, list):
+                            main_window.analysis_rules_parameters[key] = value
+                        else:
+                            main_window.fixed_rules_parameters[key] = value
 
             # Update the preview of the .ini file
             main_window.update_preview_table(main_window)
