@@ -5,6 +5,15 @@ import pickle
 import warnings
 from typing import Any, TYPE_CHECKING
 
+from uq_physicell import __version__ as uq_physicell_version
+from pcdl import __version__ as pcdl_version
+
+try:
+    from botorch import __version__ as botorch_version
+except ImportError:
+    botorch_version = "Not installed"
+    warnings.warn("Botorch is not available. Some features may be limited.")
+
 try:
     import torch
 except ImportError:
@@ -24,7 +33,7 @@ def create_structure(db_path:str):
         db_path (str): Path to the SQLite database file.
     
     Tables Created:
-        - Metadata: Stores information about the calibration (method, observed data path, .ini config path, and model structure name).
+        - Metadata: Stores information about the calibration (method, observed data path, .ini config path, model structure name, uq_physicell_version, pcdl_version, botorch_version).
         - ParameterSpace: Stores the parameter space information (ParamName, Type, Lower_Bound, Upper_Bound, Regulates).
         - QoIs: Stores the quantities of interest (QoI_Name, QoI_Function, ObsData_Column, QoI_distanceFunction, QoI_distanceWeight).
         - GP_Models: Stores the Gaussian Process models (IterationID, GP_Model, Hypervolume).
@@ -46,7 +55,10 @@ def create_structure(db_path:str):
                 BO_Method TEXT PRIMARY KEY,
                 ObsData_Path TEXT,
                 Ini_File_Path TEXT,
-                StructureName TEXT
+                StructureName TEXT,
+                uq_physicell_version TEXT,
+                pcdl_version TEXT,
+                botorch_version TEXT
             )
         """)
         cursor.execute("""
@@ -120,12 +132,15 @@ def insert_metadata(db_path:str, metadata:dict):
         conn = sqlite3.connect(db_path, timeout=30.0)
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT OR REPLACE INTO Metadata (BO_Method, ObsData_Path, Ini_File_Path, StructureName)
-            VALUES (?, ?, ?, ?)
+            INSERT OR REPLACE INTO Metadata (BO_Method, ObsData_Path, Ini_File_Path, StructureName, uq_physicell_version, pcdl_version, botorch_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (metadata['BO_Method'], 
               metadata['ObsData_Path'], 
               metadata['Ini_File_Path'], 
-              metadata['StructureName']))
+              metadata['StructureName'], 
+              uq_physicell_version,
+              pcdl_version,
+              botorch_version))
         conn.commit()
         conn.close()
     except sqlite3.Error as e:
@@ -310,19 +325,10 @@ def load_metadata(db_file: str) -> pd.DataFrame:
     conn = sqlite3.connect(db_file)
     cursor = conn.cursor()
     try:
-        # Load with flexible column handling for backward compatibility
-        cursor.execute("PRAGMA table_info(Metadata)")
-        metadata_columns_info = cursor.fetchall()
-        metadata_column_names = [col[1] for col in metadata_columns_info]
-        
         cursor.execute('SELECT * FROM Metadata')
         metadata = cursor.fetchall()
-        
-        if metadata:
-            df_metadata = pd.DataFrame(metadata, columns=metadata_column_names)
-        else:
-            # Create empty DataFrame with expected schema
-            df_metadata = pd.DataFrame(columns=['BO_Method', 'ObsData_Path', 'Ini_File_Path', 'StructureName'])
+        column_names = [description[0] for description in cursor.description]
+        df_metadata = pd.DataFrame(metadata, columns=column_names)
         return df_metadata
     except sqlite3.Error as e:
         raise RuntimeError(f"Error loading BO metadata: {e}")

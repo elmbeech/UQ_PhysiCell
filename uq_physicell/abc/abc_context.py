@@ -16,8 +16,9 @@ from dask.distributed import Client, get_worker
 
 # UQ PhysiCell imports
 from uq_physicell import PhysiCell_Model
-from uq_physicell.abc.utils import insert_adaptive_weights_db
+from uq_physicell.abc.utils import insert_adaptive_weights_db, insert_metadata_db
 from uq_physicell.utils import run_replicate_serializable
+from ..utils.sumstats import _convert_qoi_function_to_string
 
 
 class CalibrationContext:
@@ -34,6 +35,7 @@ class CalibrationContext:
         obsData_columns (dict): Dictionary mapping QoI names to their corresponding columns in the observed data.
         model_config (dict): Configuration dictionary for the PhysiCell model, including paths and structure names.
         qoi_functions (dict): Dictionary of functions to compute quantities of interest (QoIs) from model outputs.
+        qoi_def (dict): first-class object, that can be used in qoi_functions lambda string, mapped to their name.
         distance_functions (dict): Dictionary of distance functions with their weights for comparing model outputs to observed data.
         prior (Distribution): Distribution defining the prior distributions for parameters
         abc_options (dict): Options for ABC-SMC including population parameters, sampling strategies, and convergence criteria.
@@ -46,17 +48,20 @@ class CalibrationContext:
         obsData: Union[str, dict], 
         obsData_columns: dict, 
         model_config: dict, 
-        qoi_functions: dict, 
+        qoi_functions: dict,
         distance_functions: dict, 
         prior: Distribution, 
         abc_options: dict, 
+        qoi_def:dict={},
         logger: Optional[logging.Logger] = None
     ):
         """Initialize CalibrationContext with comprehensive validation and setup."""
         # Core configuration
         self.db_path = db_path
         self.model_config = model_config
-        self.qoi_functions = qoi_functions
+        # QOI_FUNCTIONS MUST BE STRINGS, BECAUSE THEY NEED TO BE SERIALIZABLE TO BE SAVED IN THE DATABASE AND USED IN THE DEFAULT AGGREGATION FUNCTION.
+        self.qoi_functions = {key: _convert_qoi_function_to_string(value, key) if not isinstance(value, str) else value for key, value in qoi_functions.items()}
+        self.qoi_def = qoi_def
         self.distance_functions = distance_functions
         self.prior = prior
         self.abc_options = abc_options
@@ -328,7 +333,18 @@ class CalibrationContext:
         dic_all_replicates = {}
         for replicate_id in replicates:
             try:
-                _, _, result_data = run_replicate_serializable(self.model_config, sample_id, replicate_id, dic_pars_xml, dic_pars_rules, qoi_functions=self.qoi_functions, return_binary_output=False, custom_summary_function=self.summary_function)
+                _, _, result_data = run_replicate_serializable(
+                    PhysiCellModel_conf=self.model_config,
+                    sample_id=sample_id,
+                    replicate_id=replicate_id,
+                    ParametersXML=dic_pars_xml,
+                    ParametersRules=dic_pars_rules,
+                    qoi_functions=self.qoi_functions,
+                    qoi_def=self.qoi_def,
+                    return_binary_output=False,
+                    #drop_columns,
+                    custom_summary_function=self.summary_function,
+                )
                 dic_all_replicates[replicate_id] = result_data
             except Exception as e:
                 raise RuntimeError(f"Error in RunModel (SampleID: {sample_id}): {e}")
@@ -416,6 +432,8 @@ class CalibrationContext:
         else:
             self.logger.info(f"Starting calibration: max populations: {self.max_populations}, max simulations: {self.max_simulations}")
             abc_smc.run(max_nr_populations=self.max_populations, max_total_nr_simulations=self.max_simulations)
+        # Add metadata to database
+        insert_metadata_db(self.db_path, self)
         # Add extra info of adaptive distance to database
         if self.adaptive_distance:
             insert_adaptive_weights_db(self.db_path, dict_distances=self.distance_functions, dict_adaptive_weights=load_dict_from_json(self.adaptive_distance_file))
@@ -539,6 +557,7 @@ def run_abc_calibration( calib_context: CalibrationContext) -> History:
                 # Add extra info of adaptive distance to database
                 if calib_context.adaptive_distance:
                     insert_adaptive_weights_db(calib_context.db_path, dict_distances=calib_context.distance_functions, dict_adaptive_weights=load_dict_from_json(calib_context.adaptive_distance_file))
+        
         # Remove temporary file and folders
         physicell_model = PhysiCell_Model(calib_context.model_config['ini_path'], calib_context.model_config['struc_name'])
         physicell_model.remove_io_folders()

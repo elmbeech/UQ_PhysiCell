@@ -4,8 +4,9 @@ from PyQt5.QtGui import QIntValidator
 import os
 import pandas as pd
 import configparser
+import xml.etree.ElementTree as ET
 
-from .load_files import load_xml_file, load_csv_file, update_rules_file, load_ini_file
+from .load_files import load_xml_file, load_rules_file, update_rules_file, load_ini_file
 
 
 def _set_executable_path_from_dialog(main_window):
@@ -44,10 +45,12 @@ def create_tab1(main_window):
     main_window.clear_combo_boxes = clear_combo_boxes
     main_window.handle_combo_selection = handle_combo_selection
     main_window.update_selected_param_label = update_selected_param_label
-    main_window.load_csv_file = load_csv_file
+    main_window.load_rules_file = load_rules_file
     main_window.clear_layout = clear_layout
     main_window.clear_rule_section = clear_rule_section
     main_window.create_rule_section = create_rule_section
+    main_window._create_rule_combo_box = _create_rule_combo_box
+    main_window._clear_rule_combo_boxes = _clear_rule_combo_boxes
     main_window.handle_combo_selection_for_rules = handle_combo_selection_for_rules
     main_window.set_rule_parameter = set_rule_parameter
     main_window.add_rule_to_analysis = add_rule_to_analysis
@@ -169,10 +172,10 @@ def create_tab1(main_window):
 
     # Add space between buttons
     main_window.value_hbox.addStretch()
-    main_window.load_rules_button = QPushButton("Load Rules CSV")
+    main_window.load_rules_button = QPushButton("Load Rules")
     main_window.load_rules_button.setEnabled(False)
     main_window.load_rules_button.setStyleSheet("background-color: lightgreen; color: black")
-    main_window.load_rules_button.clicked.connect(lambda: main_window.load_csv_file(main_window))
+    main_window.load_rules_button.clicked.connect(lambda: main_window.load_rules_file(main_window))
     main_window.value_hbox.addWidget(main_window.load_rules_button)
     layout_tab1.addLayout(main_window.value_hbox)
 
@@ -261,9 +264,13 @@ def create_combo_box(main_window, parent_node, label):
     for child in parent_node:
         # Use the 'name' attribute if it exists, otherwise use the tag
         display_name = child.get("name", child.tag)
-        # Append the 'index' attribute if it exists
+        # Show the 'index' attribute if it exists
         if "index" in child.attrib:
             display_name = f"{display_name}[{int(child.get('index')) + 1}]"
+        # Show the 'ID' attribute if it exists
+        elif "ID" in child.attrib:
+            display_name = f"{display_name}[@ID='" + child.get('ID') + "']"
+        # Generic
         combo_box.addItem(display_name)
     combo_box.currentIndexChanged.connect(lambda: main_window.handle_combo_selection(main_window, combo_box, parent_node))
 
@@ -295,6 +302,8 @@ def handle_combo_selection(main_window, combo_box, parent_node):
         display_name = child.get("name", child.tag)
         if "index" in child.attrib:
             display_name = f"{display_name}[{int(child.get('index')) + 1}]"
+        elif "ID" in child.attrib:
+            display_name = f"{display_name}[@ID='{child.get('ID')}']"
         if display_name == selected_display_name:
             # Clear combo boxes below the current one
             main_window.clear_combo_boxes(main_window, starting_index=main_window.combo_hbox.indexOf(combo_box) + 1)
@@ -325,7 +334,7 @@ def update_selected_param_label(main_window, path, value):
     # Update the labels
     main_window.selected_param_label.setText(f"XML path: {path}")
     main_window.selected_value_label.setText(f"Current value: {value} {new_value}")
-
+    
 def clear_rule_section(main_window):
     # Clear all widgets in the rule_section_vbox
     while main_window.rule_section_vbox.count():
@@ -335,10 +344,150 @@ def clear_rule_section(main_window):
         elif item.layout():
             main_window.clear_layout(main_window, item.layout())
 
+
+def _rule_display_name_xml(node):
+    display_name = node.get("name", node.tag)
+    if "index" in node.attrib:
+        display_name = f"{display_name}[{int(node.get('index')) + 1}]"
+    elif "ID" in node.attrib:
+        display_name = f"{display_name}[@ID='{node.get('ID')}']"
+    return display_name
+
+
+def _rule_path_xml(main_window, node):
+    path = []
+    while node is not None:
+        if node.tag in ("PhysiCell_settings", "behavior_rulesets"):
+            break
+        # Use as many attributes as possible to ensure uniqueness of the node in the path
+        node_name = node.tag
+        if "name" in node.attrib:
+            node_name += f"[@name='{node.get('name')}']"
+        if "index" in node.attrib:
+            node_name += f"[{int(node.get('index')) + 1}]"
+        if "ID" in node.attrib:
+            node_name += f"[@ID='{node.get('ID')}']"
+        path.insert(0, node_name)
+        node = main_window.rule_parent_map.get(node)
+    return ".//" + "/".join(path)
+
+
+def _rule_value_xml(node):
+    if "enabled" in node.attrib:
+        return node.get("enabled")
+    if "value" in node.attrib:
+        return node.get("value")
+    return node.text.strip() if node.text else "None"
+
+
+def _build_rules_tree_from_csv(csv_data):
+    rules_tree = {}
+    for _, row in csv_data.iterrows():
+        behavior_node = (
+            rules_tree
+            .setdefault(str(row["cell_type"]), {})
+            .setdefault(str(row["signal"]), {})
+            .setdefault(str(row["direction"]), {})
+            .setdefault(str(row["behavior"]), {})
+        )
+        for parameter in ["saturation", "half_max", "hill_power", "dead", "inactive"]:
+            if parameter in row.index:
+                behavior_node[parameter] = {
+                    "__leaf__": True,
+                    "path": f"{row['cell_type']},{row['signal']},{row['direction']},{row['behavior']},{parameter}",
+                    "value": row[parameter],
+                    "format": "csv",
+                }
+    return rules_tree
+
+
+def _build_rules_tree_from_xml(xml_root, main_window):
+    def recurse(node):
+        children = list(node)
+        if not children:
+            path = _rule_path_xml(main_window, node)
+            value = _rule_value_xml(node)
+            main_window.rule_value_map[path] = value
+            return {
+                "__leaf__": True,
+                "path": path,
+                "value": value,
+                "format": "xml",
+            }
+        branch = {}
+        for child in children:
+            branch[_rule_display_name_xml(child)] = recurse(child)
+        return branch
+
+    rules_tree = {}
+    for child in list(xml_root):
+        rules_tree[_rule_display_name_xml(child)] = recurse(child)
+    return rules_tree
+
+
+def _rules_tree_keys(node):
+    return [key for key in node.keys() if key != "__leaf__"]
+
+
+def _rules_is_leaf(node):
+    return isinstance(node, dict) and node.get("__leaf__", False)
+
+
+def _rules_selected_context(node):
+    return {"path": node.get("path"), "value": node.get("value"), "format": node.get("format")}
+
+
+def _clear_rule_combo_boxes(main_window, starting_index=0):
+    while main_window.rule_combo_hbox.count() > starting_index:
+        widget = main_window.rule_combo_hbox.takeAt(starting_index).widget()
+        if widget:
+            widget.deleteLater()
+
+
+def _create_rule_combo_box(main_window, parent_node, label):
+    combo_box = QComboBox()
+    combo_box.addItem(f"Select {label}...")
+    for child_name in _rules_tree_keys(parent_node):
+        combo_box.addItem(child_name)
+    combo_box.currentIndexChanged.connect(lambda: main_window.handle_combo_selection_for_rules(main_window, combo_box, parent_node))
+
+    # Add label only for the first combo box
+    if main_window.rule_combo_hbox.count() == 0:
+        label_widget = QLabel(f"Select {label}:")
+        main_window.rule_combo_hbox.addWidget(label_widget)
+    else:
+        arrow_label = QLabel("\u2794")
+        arrow_label.setAlignment(Qt.AlignCenter)
+        main_window.rule_combo_hbox.addWidget(arrow_label)
+
+    main_window.rule_combo_hbox.addWidget(combo_box)
+    return combo_box
+
 def create_rule_section(main_window):
     # Create the rules section below handle_combo_selection
-    if not hasattr(main_window, 'csv_data') or main_window.csv_data.empty:
-        main_window.update_output_tab1(main_window, "Error: No CSV data loaded.")
+    if getattr(main_window, "rules_format", "csv") == "csv":
+        if not hasattr(main_window, "csv_data") or main_window.csv_data.empty:
+            main_window.update_output_tab1(main_window, "Error: No rules loaded.")
+            return
+        main_window.rules_tree = _build_rules_tree_from_csv(main_window.csv_data)
+        main_window.rule_value_map = {
+            f"{row['cell_type']},{row['signal']},{row['direction']},{row['behavior']},{parameter}": row[parameter]
+            for _, row in main_window.csv_data.iterrows()
+            for parameter in ["saturation", "half_max", "hill_power", "dead", "inactive"]
+            if parameter in row.index
+        }
+    else:
+        if not hasattr(main_window, 'rules_tree') or not main_window.rules_tree:
+            main_window.update_output_tab1(main_window, "Error: No rules loaded.")
+            return
+        if isinstance(main_window.rules_tree, ET.Element):
+            main_window.rule_value_map = {}
+            main_window.rules_tree = _build_rules_tree_from_xml(main_window.rules_tree, main_window)
+        elif not hasattr(main_window, "rule_value_map"):
+            main_window.rule_value_map = {}
+
+    if not hasattr(main_window, 'rules_tree') or not main_window.rules_tree:
+        main_window.update_output_tab1(main_window, "Error: No rules loaded.")
         return
 
     # Ensure the rule_section_vbox is cleared before adding new widgets
@@ -353,45 +502,13 @@ def create_rule_section(main_window):
     main_window.rule_section_vbox.addWidget(rules_title_label)
 
     # Layout for rule combo boxes
-    rule_hbox = QHBoxLayout()
+    main_window.rule_combo_hbox = QHBoxLayout()
+    main_window.rule_combo_hbox.setAlignment(Qt.AlignLeft)
+    main_window.rule_section_vbox.addLayout(main_window.rule_combo_hbox)
 
-    # Create combo boxes for cell, signal, direction, behavior, and parameter
-    main_window.cell_combo = QComboBox()
-    main_window.signal_combo = QComboBox()
-    main_window.direction_combo = QComboBox()
-    main_window.behavior_combo = QComboBox()
-    main_window.parameter_combo = QComboBox()
-
-    # Populate the first four combo boxes with unique values from the respective columns
-    main_window.cell_combo.addItems(main_window.csv_data.iloc[:, 0].unique())
-    main_window.signal_combo.addItems(main_window.csv_data.iloc[:, 1].unique())
-    main_window.direction_combo.addItems(main_window.csv_data.iloc[:, 2].unique())
-    main_window.behavior_combo.addItems(main_window.csv_data.iloc[:, 3].unique())
-
-    # Populate the fifth combo box with options for parameters
-    main_window.parameter_combo.addItems(["saturation", "half_max", "hill_power", "dead", "inactive"])
-
-    # Connect combo boxes to handle selection
-    main_window.cell_combo.currentIndexChanged.connect(lambda: main_window.handle_combo_selection_for_rules(main_window))
-    main_window.signal_combo.currentIndexChanged.connect(lambda: main_window.handle_combo_selection_for_rules(main_window))
-    main_window.direction_combo.currentIndexChanged.connect(lambda: main_window.handle_combo_selection_for_rules(main_window))
-    main_window.behavior_combo.currentIndexChanged.connect(lambda: main_window.handle_combo_selection_for_rules(main_window))
-    main_window.parameter_combo.currentIndexChanged.connect(lambda: main_window.handle_combo_selection_for_rules(main_window))
-
-    # Add combo boxes to the layout
-    rule_hbox.addWidget(QLabel("Cell:"))
-    rule_hbox.addWidget(main_window.cell_combo)
-    rule_hbox.addWidget(QLabel("Signal:"))
-    rule_hbox.addWidget(main_window.signal_combo)
-    rule_hbox.addWidget(QLabel("Direction:"))
-    rule_hbox.addWidget(main_window.direction_combo)
-    rule_hbox.addWidget(QLabel("Behavior:"))
-    rule_hbox.addWidget(main_window.behavior_combo)
-    rule_hbox.addWidget(QLabel("Parameter:"))
-    rule_hbox.addWidget(main_window.parameter_combo)
-
-    # Add the rule layout to the main layout
-    main_window.rule_section_vbox.addLayout(rule_hbox)
+    main_window.current_rule_context = None
+    main_window.current_rule_leaf = None
+    _create_rule_combo_box(main_window, main_window.rules_tree, "Rule")
 
     # Group box for rule details
     rule_details_groupbox = QGroupBox("Rule Details")
@@ -411,8 +528,10 @@ def create_rule_section(main_window):
     rule_buttons_hbox = QHBoxLayout()
 
     # Add new value input for rules
+    main_window.new_value_label_input_rule = QLabel("New Value:")
     main_window.new_value_input_rule = QLineEdit()
     main_window.new_value_input_rule.setPlaceholderText("Enter new value")
+    rule_buttons_hbox.addWidget(main_window.new_value_label_input_rule)
     rule_buttons_hbox.addWidget(main_window.new_value_input_rule)
 
     # Add buttons for setting, adding to analysis, and removing rules parameters
@@ -421,7 +540,7 @@ def create_rule_section(main_window):
     set_rule_button.setStyleSheet("background-color: lightgreen; color: black")
     rule_buttons_hbox.addWidget(set_rule_button)
 
-    add_rule_analysis_button = QPushButton("Add Rule to Analysis")
+    add_rule_analysis_button = QPushButton("Add to Analysis")
     add_rule_analysis_button.clicked.connect(lambda: main_window.add_rule_to_analysis(main_window))
     add_rule_analysis_button.setStyleSheet("background-color: lightgreen; color: black")
     rule_buttons_hbox.addWidget(add_rule_analysis_button)
@@ -430,6 +549,9 @@ def create_rule_section(main_window):
     remove_rule_button.clicked.connect(lambda: main_window.remove_rule_parameter(main_window))
     remove_rule_button.setStyleSheet("background-color: yellow; color: black")
     rule_buttons_hbox.addWidget(remove_rule_button)
+
+    # Keep controls fixed-width and absorb extra space at the end of the row.
+    rule_buttons_hbox.addStretch()
 
     # Add text into new_value_input_rule enables the set parameter button and disables it if empty (oposite for add_analysis_button)
     main_window.new_value_input_rule.textChanged.connect(
@@ -450,8 +572,9 @@ def create_rule_section(main_window):
     # Add the buttons layout to the main layout
     main_window.rule_section_vbox.addLayout(rule_buttons_hbox)
 
-    # Update Rule Path and Rule Value based on combo box selections
-    main_window.handle_combo_selection_for_rules(main_window)
+    # Initialize the labels for the default selection state
+    main_window.selected_rule_label.setText("Rule Path: None")
+    main_window.selected_rule_value_label.setText("Rule Value: None")
 
 def clear_layout(main_window, layout):
     # Recursively clear all items in a layout
@@ -462,101 +585,55 @@ def clear_layout(main_window, layout):
         elif item.layout():
             main_window.clear_layout(main_window, item.layout())
 
-def handle_combo_selection_for_rules(main_window):
-    # Update Rule Path and Rule Value based on combo box selections
+def handle_combo_selection_for_rules(main_window, combo_box=None, parent_node=None):
+    # Update Rule Path and Rule Value based on nested rule selections
     try:
-        cell = main_window.cell_combo.currentText()
-        signal = main_window.signal_combo.currentText()
-        direction = main_window.direction_combo.currentText()
-        behavior = main_window.behavior_combo.currentText()
-        parameter = main_window.parameter_combo.currentText()
-
-        # Find the corresponding row in the CSV
-        rule_row = main_window.csv_data[
-            (main_window.csv_data.iloc[:, 0] == cell) &
-            (main_window.csv_data.iloc[:, 1] == signal) &
-            (main_window.csv_data.iloc[:, 2] == direction) &
-            (main_window.csv_data.iloc[:, 3] == behavior)
-        ]
-
-        if rule_row.empty:
-            main_window.selected_rule_label.setText("Rule: None")
-            main_window.selected_rule_value_label.setText("Value: None")
+        if combo_box is None or parent_node is None:
             return
 
-        # Extract the respective value for the selected parameter
-        if parameter == "saturation":
-            value = rule_row.iloc[0, 4]
-        elif parameter == "half_max":
-            value = rule_row.iloc[0, 5]
-        elif parameter == "hill_power":
-            value = rule_row.iloc[0, 6]
-        elif parameter == "dead":
-            value = rule_row.iloc[0, 7]
-        elif parameter == "inactive":
-            value = rule_row.iloc[0, 8]
-        else:
-            value = "None"
+        selected_display_name = combo_box.currentText()
+        if selected_display_name.startswith("Select") or not selected_display_name:
+            return
 
-        # Determine the displayed value
-        rule_key = f"{cell},{signal},{direction},{behavior},{parameter}"
-        new_value = ''
-        if rule_key in main_window.fixed_rules_parameters:
-            new_value += f"\u2794 {main_window.fixed_rules_parameters[rule_key]}"
-        elif rule_key in main_window.analysis_rules_parameters:
-            new_value += "\u2794 <analysis>"
+        child = parent_node[selected_display_name]
+        if _rules_is_leaf(child):
+            main_window.current_rule_leaf = child
+            main_window.current_rule_context = _rules_selected_context(child)
+            rule_key = child["path"]
+            value = child["value"]
+            new_value = ''
+            if rule_key in main_window.fixed_rules_parameters:
+                new_value += f"\u2794 {main_window.fixed_rules_parameters[rule_key]}"
+            elif rule_key in main_window.analysis_rules_parameters:
+                new_value += "\u2794 <analysis>"
+            main_window.selected_rule_label.setText(f"Rule: {rule_key}")
+            main_window.selected_rule_value_label.setText(f"Value: {value} {new_value}")
+            return
 
-        # Update Rule Path and Rule Value
-        main_window.selected_rule_label.setText(f"Rule: {rule_key}")
-        main_window.selected_rule_value_label.setText(f"Value: {value} {new_value}")
+        main_window.current_rule_leaf = None
+        main_window.current_rule_context = None
+        main_window._clear_rule_combo_boxes(main_window, starting_index=main_window.rule_combo_hbox.indexOf(combo_box) + 1)
+        if _rules_tree_keys(child):
+            main_window._create_rule_combo_box(main_window, child, selected_display_name)
     except Exception as e:
         main_window.update_output_tab1(main_window, f"Error handling rule selection: {e}")
 
 def set_rule_parameter(main_window):
     # Set a fixed value for the selected rule parameter
     try:
-        cell = main_window.cell_combo.currentText()
-        signal = main_window.signal_combo.currentText()
-        direction = main_window.direction_combo.currentText()
-        behavior = main_window.behavior_combo.currentText()
-        parameter = main_window.parameter_combo.currentText()
         new_value = main_window.new_value_input_rule.text()
 
         if not new_value:
             main_window.update_output_tab1(main_window, "Error: New value is required.")
             return
 
-        # Find the corresponding row in the CSV
-        rule_row = main_window.csv_data[
-            (main_window.csv_data.iloc[:, 0] == cell) &
-            (main_window.csv_data.iloc[:, 1] == signal) &
-            (main_window.csv_data.iloc[:, 2] == direction) &
-            (main_window.csv_data.iloc[:, 3] == behavior)
-        ]
-
-        if rule_row.empty:
-            main_window.update_output_tab1(main_window, "Error: No matching rule found in the CSV.")
+        if not getattr(main_window, "current_rule_context", None):
+            main_window.update_output_tab1(main_window, "Error: No rule selected.")
             return
 
-        # Extract the respective columns for the selected parameter
-        if parameter == "saturation":
-            column_index = 4
-        elif parameter == "half_max":
-            column_index = 5
-        elif parameter == "hill_power":
-            column_index = 6
-        elif parameter == "dead":
-            column_index = 7
-        elif parameter == "inactive":
-            column_index = 8
-        else:
-            main_window.update_output_tab1(main_window, "Error: Invalid parameter selected.")
-            return
-
-        # Update the rule parameter
-        rule_key = f"{cell},{signal},{direction},{behavior},{parameter}"
+        rule_key = main_window.current_rule_context["path"]
+        old_value = main_window.current_rule_context["value"]
         main_window.fixed_rules_parameters[rule_key] = new_value
-        old_value = main_window.csv_data.iloc[rule_row.index[0], column_index]
         main_window.selected_rule_label.setText(f"Rule Path: {rule_key}")
         main_window.selected_rule_value_label.setText(f"Rule Value: {old_value} \u2794 {new_value}")
         main_window.update_preview_table(main_window)
@@ -567,41 +644,12 @@ def set_rule_parameter(main_window):
 def add_rule_to_analysis(main_window):
    # Add the selected rule parameter to the analysis
     try:
-        cell = main_window.cell_combo.currentText()
-        signal = main_window.signal_combo.currentText()
-        direction = main_window.direction_combo.currentText()
-        behavior = main_window.behavior_combo.currentText()
-        parameter = main_window.parameter_combo.currentText()
-
-        # Find the corresponding row in the CSV
-        rule_row = main_window.csv_data[
-            (main_window.csv_data.iloc[:, 0] == cell) &
-            (main_window.csv_data.iloc[:, 1] == signal) &
-            (main_window.csv_data.iloc[:, 2] == direction) &
-            (main_window.csv_data.iloc[:, 3] == behavior)
-        ]
-
-        if rule_row.empty:
-            main_window.update_output_tab1(main_window, "Error: No matching rule found in the CSV.")
+        if not getattr(main_window, "current_rule_context", None):
+            main_window.update_output_tab1(main_window, "Error: No rule selected.")
             return
 
-        # Extract the respective columns for the selected parameter
-        if parameter == "saturation":
-            old_value = rule_row.iloc[0, 4]
-        elif parameter == "half_max":
-            old_value = rule_row.iloc[0, 5]
-        elif parameter == "hill_power":
-            old_value = rule_row.iloc[0, 6]
-        elif parameter == "dead":
-            old_value = rule_row.iloc[0, 7]
-        elif parameter == "inactive":
-            old_value = rule_row.iloc[0, 8]
-        else:
-            main_window.update_output_tab1(main_window, "Error: Invalid parameter selected.")
-            return
-
-        # Add the rule to the analysis
-        rule_key = f"{cell},{signal},{direction},{behavior},{parameter}"
+        rule_key = main_window.current_rule_context["path"]
+        old_value = main_window.current_rule_context["value"]
         # Add the selected parameter to the analysis
         friendly_name, ok = QInputDialog.getText(main_window, "Add Parameter to Analysis", "Enter a friendly name:")
         if ok and friendly_name:
@@ -618,21 +666,18 @@ def add_rule_to_analysis(main_window):
 def remove_rule_parameter(main_window):
     # Remove the selected rule parameter from fixed or analysis parameters
     try:
-        cell = main_window.cell_combo.currentText()
-        signal = main_window.signal_combo.currentText()
-        direction = main_window.direction_combo.currentText()
-        behavior = main_window.behavior_combo.currentText()
-        parameter = main_window.parameter_combo.currentText()
+        if not getattr(main_window, "current_rule_context", None):
+            main_window.update_output_tab1(main_window, "Error: No rule selected.")
+            return
 
-        rule_key = f"{cell},{signal},{direction},{behavior},{parameter}"
+        rule_key = main_window.current_rule_context["path"]
 
         if rule_key in main_window.fixed_rules_parameters:
             del main_window.fixed_rules_parameters[rule_key]
-            main_window.update_output_tab1(main_window, f"Removed fixed rule parameter '{rule_key}'.")
 
         if rule_key in main_window.analysis_rules_parameters:
             del main_window.analysis_rules_parameters[rule_key]
-            main_window.update_output_tab1(main_window, f"Removed analysis rule parameter '{rule_key}'.")
+        main_window.update_output_tab1(main_window, f"Removed rule parameter '{rule_key}'.")
 
         # Update the selected rule label and value
         main_window.update_preview_table(main_window)
@@ -646,13 +691,16 @@ def get_parameter_path_xml(main_window, node):
         # Skip the root tag 'PhysiCell_settings'
         if node.tag == "PhysiCell_settings":
             break
-        # Use 'name' attribute if it exists, otherwise use the tag
+        # Use many attributes as possible to ensure uniqueness of the node in the path
         node_name = node.tag
         if "name" in node.attrib:
             node_name += f"[@name='{node.get('name')}']"
         # Append 'index' attribute if it exists
         if "index" in node.attrib:
             node_name += f"[{int(node.get('index')) + 1}]"
+        # Use ID attribute if it exists
+        if "ID" in node.attrib:
+            node_name += f"[@ID='{node.get('ID')}']"
         path.insert(0, node_name)
         node = main_window.parent_map.get(node)  # Use the parent map to find the parent
     return ".//" + "/".join(path)
@@ -670,30 +718,15 @@ def get_parameter_value_xml(main_window, path):
     return None
 
 def get_rule_value(main_window, rule_key):
-    # Retrieve the default value from the rules CSV for a given rule key
+    # Retrieve the default value from the loaded rules file for a given rule key
     try:
-        cell, signal, direction, behavior, parameter = rule_key.split(",")
-        rule_row = main_window.csv_data[
-            (main_window.csv_data.iloc[:, 0] == cell) &
-            (main_window.csv_data.iloc[:, 1] == signal) &
-            (main_window.csv_data.iloc[:, 2] == direction) &
-            (main_window.csv_data.iloc[:, 3] == behavior)
-        ]
-        if not rule_row.empty:
-            if parameter == "saturation":
-                return rule_row.iloc[0, 4]
-            elif parameter == "half_max":
-                return rule_row.iloc[0, 5]
-            elif parameter == "hill_power":
-                return rule_row.iloc[0, 6]
-            elif parameter == "dead":
-                return rule_row.iloc[0, 7]
-            elif parameter == "inactive":
-                return rule_row.iloc[0, 8]
-        else:
-            main_window.update_output_tab1(main_window, f"Warning: No matching rule found for key '{rule_key}' in the CSV.")
+        if hasattr(main_window, "rule_value_map") and rule_key in main_window.rule_value_map:
+            return main_window.rule_value_map[rule_key]
+        main_window.update_output_tab1(main_window, f"Warning: No matching rule found for key '{rule_key}'.")
+        print(f"Warning: No matching rule found for key '{rule_key}'.")
     except Exception as e:
         main_window.update_output_tab1(main_window, f"Error retrieving rule value for key '{rule_key}': {e}")
+        print(f"Error retrieving rule value for key '{rule_key}': {e}")
     return None
 
 def set_parameter_value(main_window):
@@ -775,7 +808,7 @@ def update_preview_table(main_window):
             main_window.preview_table.setItem(row_position, 0, QTableWidgetItem(path))
             main_window.preview_table.setItem(row_position, 1, QTableWidgetItem(str(value)))
             main_window.preview_table.setItem(row_position, 2, QTableWidgetItem(""))
-            main_window.preview_table.setItem(row_position, 3, QTableWidgetItem("CSV"))
+            main_window.preview_table.setItem(row_position, 3, QTableWidgetItem(getattr(main_window, "rules_format", "rules").upper()))
             row_position += 1
 
         # Analysis rules parameters
@@ -783,7 +816,7 @@ def update_preview_table(main_window):
             main_window.preview_table.setItem(row_position, 0, QTableWidgetItem(path))
             main_window.preview_table.setItem(row_position, 1, QTableWidgetItem("<variable>"))
             main_window.preview_table.setItem(row_position, 2, QTableWidgetItem(str(value[1])))
-            main_window.preview_table.setItem(row_position, 3, QTableWidgetItem("CSV"))
+            main_window.preview_table.setItem(row_position, 3, QTableWidgetItem(getattr(main_window, "rules_format", "rules").upper()))
             row_position += 1
 
 
@@ -865,14 +898,28 @@ def save_ini_file(main_window):
             if (main_window.fixed_parameters or main_window.analysis_parameters):
                 parameters = {path: value for path, value in main_window.fixed_parameters.items()}
                 parameters.update({path: value for path, value in main_window.analysis_parameters.items()})
-                config[struc_name]["parameters"] = str(parameters)
+                # Add /n line breaks for better readability in the .ini file
+                parameters_str = "{ \n"
+                for key, value in parameters.items():
+                    if isinstance(value, list):
+                        parameters_str += f"\t\"{key}\" : {value},\n"
+                    else:
+                        parameters_str += f"\t\"{key}\" : '{value}',\n"
+                config[struc_name]["parameters"] = parameters_str + "}"
 
             # Add rules if applicable
             if (main_window.fixed_rules_parameters or main_window.analysis_rules_parameters):
                 config[struc_name]["rulesFile_ref"] = os.path.relpath(main_window.rule_path, os.getcwd())
                 rules_parameters = {key: value for key, value in main_window.fixed_rules_parameters.items()}
                 rules_parameters.update({key: value for key, value in main_window.analysis_rules_parameters.items()})
-                config[struc_name]["parameters_rules"] = str(rules_parameters)
+                # Add /n line breaks for better readability in the .ini file
+                rules_parameters_str = "{ \n"
+                for key, value in rules_parameters.items():
+                    if isinstance(value, list):
+                        rules_parameters_str += f"\t\"{key}\" : {value},\n"
+                    else:
+                        rules_parameters_str += f"\t\"{key}\" : '{value}',\n"
+                config[struc_name]["parameters_rules"] = rules_parameters_str + "}"
 
             # Write to the file
             with open(file_path, "w") as ini_file:

@@ -50,6 +50,7 @@ from uq_physicell.database.ma_db import (
 )
 from uq_physicell.model_analysis.utils import calculate_qoi_from_sa_db
 from ..utils.model_wrapper import run_replicate_serializable
+from ..utils.sumstats import _convert_qoi_function_to_string
 from ..utils.distances import SumSquaredDifferences
 from ..database.bo_db import (
     create_structure, insert_metadata, insert_param_space, insert_qois, 
@@ -67,6 +68,7 @@ class CalibrationContext:
         obsData_columns (dict): Dictionary mapping QoI names to their corresponding columns in the observed data.
         model_config (dict): Configuration dictionary for the PhysiCell model, including paths and structure names.
         qoi_functions (dict): Dictionary of functions to compute quantities of interest (QoIs) from model outputs.
+        qoi_def (dict): first-class object, that can be used in qoi_functions lambda string, mapped to their name.
         distance_functions (dict): Dictionary of functions to compute distances between model outputs and observed data.
         search_space (dict): Dictionary defining the search space for parameters, including bounds and types.
         bo_options (dict): Options for Bayesian Optimization including sampling parameters.
@@ -84,7 +86,8 @@ class CalibrationContext:
         qoi_functions: dict, 
         bo_options: dict,
         distance_functions: dict=None, 
-        search_space: dict=None, 
+        search_space: dict=None,
+        qoi_def:dict={},
         logger: logging.Logger=None
     ):
         """Initialize CalibrationContext with comprehensive validation and setup."""
@@ -93,7 +96,9 @@ class CalibrationContext:
         # Core configuration
         self.db_path = db_path
         self.model_config = model_config
-        self.qoi_functions = qoi_functions
+        # QOI_FUNCTIONS MUST BE STRINGS, BECAUSE THEY NEED TO BE SERIALIZABLE TO BE SAVED IN THE DATABASE AND USED IN THE DEFAULT AGGREGATION FUNCTION.
+        self.qoi_functions = {key: _convert_qoi_function_to_string(value, key) if not isinstance(value, str) else value for key, value in qoi_functions.items()}
+        self.qoi_def = qoi_def
         self.distance_functions = distance_functions
         self.search_space = search_space
         self.bo_options = bo_options
@@ -230,11 +235,16 @@ class CalibrationContext:
         dic_params_xml = {par_name: par_value for par_name, par_value in params.items() if par_name in PC_model.XML_parameters_variable.values()}
         dic_params_rules = {par_name: par_value for par_name, par_value in params.items() if par_name in PC_model.parameters_rules_variable.values()}
         _, _, result_data = run_replicate_serializable(
-            self.model_config, 
-            sample_id, replicate_id,
-            dic_params_xml, dic_params_rules,
-            qoi_functions=self.qoi_functions, return_binary_output=False,
-            custom_summary_function=self.summary_function
+            PhysiCellModel_conf=self.model_config,
+            sample_id=sample_id,
+            replicate_id=replicate_id,
+            ParametersXML=dic_params_xml,
+            ParametersRules=dic_params_rules,
+            qoi_functions=self.qoi_functions,
+            qoi_def=self.qoi_def,
+            return_binary_output=False,
+            #drop_columns,
+            custom_summary_function=self.summary_function,
         )
         dic_result_data = result_data.to_dict(orient='list')
         dic_result_data_np = {key: np.array(list_values) for key, list_values in dic_result_data.items()}
@@ -414,7 +424,7 @@ class CalibrationContext:
             train_x_list.append(param_dict_to_tensor(dic_params_i, self.search_space))
 
         # MCDS lists to QoIs
-        df_qois_data = calculate_qoi_from_sa_db(self.db_path_initial_samples, self.qoi_functions, mode='calib')
+        df_qois_data = calculate_qoi_from_sa_db(db_file=self.db_path_initial_samples, qoi_functions=self.qoi_functions, qoi_def=self.qoi_def, mode='calib')
         objectives_list = []
         obj_noise_list = []
         for sample_id in dic_samples.keys():
@@ -1228,7 +1238,10 @@ def run_bayesian_optimization(calib_context: CalibrationContext, additional_iter
         physicell_model.remove_io_folders()
         
     except Exception as e:
-        logger.error(f"❌ Error during Bayesian optimization: {e}")
+        if resume_from_db:
+            logger.error(f"❌ Error during Bayesian optimization (resuming from DB):  {e} \nTO AVOID CONFLICT, DEFINE A NEW DATA BASE NAME OR REMOVE THE EXISTING ONE!")
+        else:
+            logger.error(f"❌ Error during Bayesian optimization: {e}")
         raise
 
 

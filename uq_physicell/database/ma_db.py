@@ -6,6 +6,8 @@ import pickle
 import time
 
 from uq_physicell import PhysiCell_Model
+from uq_physicell import __version__ as uq_physicell_version
+from pcdl import __version__ as pcdl_version
 
 def _safe_pickle_loads(data):
     """Safely deserialize pickled data from SQLite BLOB storage.
@@ -64,7 +66,7 @@ def create_structure(db_file: str):
         db_file (str): Path to the SQLite database file to be created.
     
     Tables Created:
-        - Metadata: Stores simulation metadata (sampler, config path, model structure)
+        - Metadata: Stores simulation metadata (sampler, config path, model structure, uq_physicell version, pcdl version)
         - ParameterSpace: Stores parameter definitions (name, bounds, reference values)
         - QoIs: Stores quantities of interest definitions (name, function)
         - Samples: Stores parameter samples (sample ID, parameter name, value)
@@ -91,7 +93,9 @@ def create_structure(db_file: str):
             CREATE TABLE Metadata (
                 Sampler TEXT,
                 Ini_File_Path TEXT,
-                StructureName TEXT
+                StructureName TEXT,
+                uq_physicell_version TEXT,
+                pcdl_version TEXT
             )
         ''')
         # Create ParameterSpace table
@@ -151,9 +155,9 @@ def insert_metadata(db_file: str, sampler: str, ini_file_path: str, strucName: s
     cursor = conn.cursor()
     try:
         cursor.execute('''
-            INSERT INTO Metadata (Sampler, Ini_File_Path, StructureName)
-            VALUES (?, ?, ?)
-        ''', (sampler, ini_file_path, strucName))
+            INSERT INTO Metadata (Sampler, Ini_File_Path, StructureName, uq_physicell_version, pcdl_version)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (sampler, ini_file_path, strucName, uq_physicell_version, pcdl_version))
         conn.commit()
         conn.close()
     except sqlite3.Error as e:
@@ -346,7 +350,9 @@ def load_metadata(db_file: str) -> pd.DataFrame:
     try:
         cursor.execute('SELECT * FROM Metadata')
         metadata = cursor.fetchall()
-        df_metadata = pd.DataFrame(metadata, columns=['Sampler', 'Ini_File_Path', 'StructureName'])
+        # Extract names from the description
+        column_names = [description[0] for description in cursor.description]
+        df_metadata = pd.DataFrame(metadata, columns=column_names)
         return df_metadata
     except sqlite3.Error as e:
         raise RuntimeError(f"Error loading metadata: {e}")
@@ -620,7 +626,7 @@ def load_structure(db_file: str, load_result: bool = True) -> tuple:
     
     Returns:
         tuple: A 5-tuple containing:
-            - df_metadata (pd.DataFrame): Metadata information (sampler, config, structure)
+            - df_metadata (pd.DataFrame): Metadata information (sampler, config, structure, uq_physicell version, pcdl version)
             - df_parameter_space (pd.DataFrame): Parameter space definitions
             - df_qois (pd.DataFrame): Quantities of interest definitions
             - dic_samples (dict): Dictionary of parameter samples by sample ID

@@ -5,18 +5,21 @@
 
 import os
 import sys
+from importlib.util import module_from_spec, spec_from_file_location
 
 # Add the project root to the Python path
 sys.path.insert(0, os.path.abspath('..'))
 
-# Import version from the package
-try:
-    from uq_physicell.VERSION import __version__
-    release = __version__
-    version = __version__
-except ImportError:
-    # Fallback version if import fails
-    raise ValueError("Could not import version from uq_physicell.VERSION")
+# Import version without importing the package root, which pulls in optional
+# runtime dependencies that are unavailable on Read the Docs.
+version_file = os.path.abspath(os.path.join('..', 'uq_physicell', 'VERSION.py'))
+version_spec = spec_from_file_location('uq_physicell_VERSION', version_file)
+if version_spec is None or version_spec.loader is None:
+    raise ValueError("Could not load version from uq_physicell/VERSION.py")
+version_module = module_from_spec(version_spec)
+version_spec.loader.exec_module(version_module)
+release = version_module.__version__
+version = version_module.__version__
 
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
@@ -85,7 +88,12 @@ autodoc_default_options = {
 autodoc_mock_imports = [
     'botorch',
     'gpytorch', 
+    'mpi4py',
+    'pcdl',
+    'PyQt5',
+    'SALib',
     'torch',
+    'dask',
     'matplotlib',
     'scipy',
     'seaborn',
