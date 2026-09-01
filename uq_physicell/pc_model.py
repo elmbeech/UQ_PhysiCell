@@ -40,6 +40,9 @@ class PhysiCell_Model:
         self._load_rules_reference()
         # Dictionary to track all active processes
         self.active_processes = {}
+        # Random seed used by the most recent RunModel call (read from PhysiCell's
+        # <output_folder>/random_seed.txt after the run). None if unavailable.
+        self._last_random_seed = None
         
     def _load_config(self, configFilePath: str, keyModel: str) -> None:
         configFile = configparser.ConfigParser()
@@ -406,6 +409,20 @@ def _load_ini_section_as_dict(config_file_path: str, section: str) -> dict:
     # Keep the active structure only; unrelated sections should not affect compatibility.
     return {key: parser[section][key] for key in parser[section]}
 
+def _read_random_seed(output_folder: str) -> Union[int, None]:
+    """Read the resolved random seed from PhysiCell's random_seed.txt.
+
+    PhysiCell (>= 1.14) writes the seed actually used by the RNG to
+    <output_folder>/random_seed.txt, even when the config requested "system_clock".
+    Returns the integer seed, or None if the file is missing or unreadable
+    (e.g. older PhysiCell, or the output folder was already cleaned up).
+    """
+    try:
+        with open(os.path.join(output_folder, "random_seed.txt")) as fd:
+            return int(fd.read().strip())
+    except (OSError, ValueError):
+        return None
+
 def _setup_model_input(model: PhysiCell_Model, SampleID: int, ReplicateID: int, parameters_input: Union[np.ndarray, dict], parameters_rules_input: Union[np.ndarray, dict]) -> None:
     try:
         if model.verbose:
@@ -489,6 +506,7 @@ def _setup_model_input(model: PhysiCell_Model, SampleID: int, ReplicateID: int, 
 def _run_model(model: PhysiCell_Model, SampleID: int, ReplicateID: int, Parameters: Union[np.ndarray, dict] = dict(), ParametersRules: Union[np.ndarray, dict] = dict(), RemoveConfigFile: bool = True, SummaryFunction: Union[None, str] = None) -> Union[None, pd.DataFrame]:
     if model.verbose:
         print(f"\t> Running - Sample:{SampleID}, Replicate: {ReplicateID}, Parameters XML: {Parameters}, Parameters rules: {ParametersRules}...")
+    model._last_random_seed = None
     try:
         try:
             if model.verbose:
@@ -517,6 +535,10 @@ def _run_model(model: PhysiCell_Model, SampleID: int, ReplicateID: int, Paramete
             {stdout[-1000:]}""")
         elif model.verbose:
             print("\t\t>> Simulation completed successfully!")
+
+        # Capture the random seed PhysiCell used, before a SummaryFunction can
+        # remove the output folder. None if random_seed.txt is unavailable.
+        model._last_random_seed = _read_random_seed(model._get_output_path(SampleID, ReplicateID))
 
         if RemoveConfigFile:
             if model.verbose:

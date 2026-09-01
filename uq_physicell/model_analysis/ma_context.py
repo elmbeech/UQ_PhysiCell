@@ -432,6 +432,7 @@ def run_simulations(context: ModelAnalysisContext):
                     return_binary_output=True,
                     #drop_columns,
                     custom_summary_function=context.summary_function,
+                    return_seed=True,
                 ))
              
             # Use as_completed with a short timeout to avoid blocking when cancelled
@@ -451,10 +452,10 @@ def run_simulations(context: ModelAnalysisContext):
                             continue
                         
                         try:
-                            sample_id, replicate_id, result_data = future_done.result(timeout=0.5)
+                            sample_id, replicate_id, result_data, seed = future_done.result(timeout=0.5)
                             context.logger.info(f"Writing to the database for Sample: {sample_id}, Replicate: {replicate_id}, Result size: {sys.getsizeof(result_data)/1024:.2f} KB")
                             try:
-                                insert_output(context.db_path, sample_id, replicate_id, result_data)
+                                insert_output(context.db_path, sample_id, replicate_id, result_data, seed=seed)
                                 # Drop the reference now that the result is durably written — Future.result()
                                 # caches its return value forever, so leaving it in context.futures keeps the
                                 # full (uncompressed) result blob resident for the entire context's lifetime.
@@ -507,8 +508,9 @@ def run_simulations(context: ModelAnalysisContext):
                     result_data_nonserialized = PhysiCellModel.RunModel(
                         All_Samples[ind_sim], All_Replicates[ind_sim], ParametersXML, ParametersRules, RemoveConfigFile=True, SummaryFunction=context.summary_function)
                     result_data = pickle.dumps(result_data_nonserialized)
+                    seed = PhysiCellModel._last_random_seed
                 else:
-                    _, _, result_data = run_replicate(
+                    _, _, result_data, seed = run_replicate(
                         PhysiCellModel=PhysiCellModel,
                         sample_id=All_Samples[ind_sim],
                         replicate_id=All_Replicates[ind_sim],
@@ -519,8 +521,9 @@ def run_simulations(context: ModelAnalysisContext):
                         #return_binary_output,
                         #drop_columns,
                         #custom_summary_function,
+                        return_seed=True,
                     )
- 
+
             except Exception as e:
                 context.logger.error(
                     f"Rank {rank}: Error running simulation for Sample: {All_Samples[ind_sim]}, Replicate: {All_Replicates[ind_sim]}: {e}"
@@ -530,7 +533,7 @@ def run_simulations(context: ModelAnalysisContext):
             # Write to database with retry logic
             context.logger.info(f"Rank {rank} writing to database for Sample: {All_Samples[ind_sim]}, Replicate: {All_Replicates[ind_sim]}")
             try:
-                insert_output(context.db_path, All_Samples[ind_sim], All_Replicates[ind_sim], result_data)
+                insert_output(context.db_path, All_Samples[ind_sim], All_Replicates[ind_sim], result_data, seed=seed)
                 context.logger.info(f"Rank {rank} successfully wrote results for Sample: {All_Samples[ind_sim]}, Replicate: {All_Replicates[ind_sim]}")
             except Exception as e:
                 context.logger.error(f"Rank {rank} failed to write results for Sample: {All_Samples[ind_sim]}, Replicate: {All_Replicates[ind_sim]}: {e}")
@@ -555,8 +558,9 @@ def run_simulations(context: ModelAnalysisContext):
                 result_data_nonserialized = PhysiCellModel.RunModel(
                     All_Samples[ind_sim], All_Replicates[ind_sim], ParametersXML, ParametersRules, RemoveConfigFile=True, SummaryFunction=context.summary_function)
                 result_data = pickle.dumps(result_data_nonserialized)
+                seed = PhysiCellModel._last_random_seed
             else:
-                _, _, result_data = run_replicate(
+                _, _, result_data, seed = run_replicate(
                     PhysiCell_Model=PhysiCellModel,
                     sample_id=All_Samples[ind_sim],
                     replicate_id=All_Replicates[ind_sim],
@@ -567,12 +571,13 @@ def run_simulations(context: ModelAnalysisContext):
                     #return_binary_output,
                     #drop_columns,
                     #custom_summary_function,
+                    return_seed=True,
                 )
 
             # Write to the database directly (no locks or MPI synchronization needed)
             context.logger.info(f"Rank {rank} writing to the database for Sample: {All_Samples[ind_sim]}, Replicate: {All_Replicates[ind_sim]}")
             try:
-                insert_output(context.db_path, All_Samples[ind_sim], All_Replicates[ind_sim], pickle.dumps(result_data))
+                insert_output(context.db_path, All_Samples[ind_sim], All_Replicates[ind_sim], pickle.dumps(result_data), seed=seed)
                 context.logger.info(f"Rank {rank} finished writing to the database for Sample: {All_Samples[ind_sim]}, Replicate: {All_Replicates[ind_sim]}")
             except Exception as e:
                 context.logger.error(f"Error inserting output into the database: {e}")

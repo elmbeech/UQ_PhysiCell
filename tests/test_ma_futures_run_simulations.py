@@ -45,9 +45,10 @@ def mock_run_replicate_serializable(
     ParametersXML, ParametersRules,
     qoi_functions=None, qoi_def={},
     return_binary_output=True, drop_columns=None,
-    custom_summary_function=None,
+    custom_summary_function=None, return_seed=False,
 ):
-    return sample_id, replicate_id, pickle.dumps({"out1": 1.0})
+    result = (sample_id, replicate_id, pickle.dumps({"out1": 1.0}))
+    return result + (None,) if return_seed else result
 
 
 # ─── shared patch set (applied per test function) ───────────────────────────
@@ -57,9 +58,10 @@ def mock_run_replicate(
     ParametersXML=None, ParametersRules=None,
     qoi_functions=None, qoi_def={},
     return_binary_output=True, drop_columns=None,
-    custom_summary_function=None,
+    custom_summary_function=None, return_seed=False,
 ):
-    return sample_id, replicate_id, pickle.dumps({"out1": 1.0})
+    result = (sample_id, replicate_id, pickle.dumps({"out1": 1.0}))
+    return result + (None,) if return_seed else result
 
 
 PATCHES = [
