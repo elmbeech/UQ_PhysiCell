@@ -81,7 +81,7 @@ def create_structure(db_file: str):
         - ParameterSpace: Stores parameter definitions (name, bounds, reference values)
         - QoIs: Stores quantities of interest definitions (name, function)
         - Samples: Stores parameter samples (sample ID, parameter name, value)
-        - Output: Stores simulation results (sample ID, replicate ID, serialized data)
+        - Output: Stores simulation results (sample ID, replicate ID, serialized data, random seed)
     
     Note:
         If the database file already exists, it will be removed and recreated
@@ -144,7 +144,8 @@ def create_structure(db_file: str):
             CREATE TABLE Output (
                 SampleID INTEGER,
                 ReplicateID INTEGER,
-                Data BLOB
+                Data BLOB,
+                Seed INTEGER
             )
         ''')
         conn.commit()
@@ -319,27 +320,29 @@ def insert_samples(db_file: str, dic_samples: dict):
     except sqlite3.Error as e:
         raise RuntimeError(f"Error inserting samples into the database: {e}")
 
-def insert_output(db_file: str, sample_id: int, replicate_id: int, result_data: bytes, compress: bool = True):
+def insert_output(db_file: str, sample_id: int, replicate_id: int, result_data: bytes, compress: bool = True, seed: int = None):
     """Insert simulation results into the Output table.
-    
+
     Args:
         db_file (str): Path to the SQLite database file.
         sample_id (int): Unique identifier for the parameter sample.
         replicate_id (int): Identifier for the simulation replicate.
         result_data (bytes): Serialized simulation results data.
         compress (bool): If True, compress data with zstd before storing (default True).
-    
+        seed (int, optional): Random seed PhysiCell used for this replicate. Stored as
+            NULL when None (e.g. unknown, or an older PhysiCell without random_seed.txt).
+
     Raises:
         RuntimeError: If output insertion fails due to database errors.
-    
+
     Example:
         >>> import pickle
         >>> data = pd.DataFrame({'time': [0, 1, 2], 'cells': [1, 2, 3]})
         >>> serialized_data = pickle.dumps(data)
         >>> insert_output('study.db', 0, 1, serialized_data)
-        >>> 
-        >>> # With compression
-        >>> insert_output('study.db', 0, 1, serialized_data, compress=True)
+        >>>
+        >>> # With compression and a recorded seed
+        >>> insert_output('study.db', 0, 1, serialized_data, compress=True, seed=1234567)
     """
     conn = None
     try:
@@ -355,8 +358,9 @@ def insert_output(db_file: str, sample_id: int, replicate_id: int, result_data: 
         else:
             insert_blob = result_data
         
-        cursor.execute('INSERT INTO Output (SampleID, ReplicateID, Data) VALUES (?, ?, ?)',
-                       (sample_id, int(replicate_id), sqlite3.Binary(insert_blob)))
+        cursor.execute('INSERT INTO Output (SampleID, ReplicateID, Data, Seed) VALUES (?, ?, ?, ?)',
+                       (sample_id, int(replicate_id), sqlite3.Binary(insert_blob),
+                        int(seed) if seed is not None else None))
         conn.commit()
 
     except sqlite3.Error as e:
@@ -534,8 +538,8 @@ def load_samples(db_file: str) -> dict:
     finally:
         conn.close()
 
-def load_output(db_file: str, sample_ids: list = None, replicate_ids: list = None, 
-                load_data: bool = True) -> pd.DataFrame:
+def load_output(db_file: str, sample_ids: list = None, replicate_ids: list = None,
+                load_data: bool = True, load_seed: bool = False) -> pd.DataFrame:
     """Load simulation output from the database with flexible filtering options.
     
     This function allows selective loading of simulation results, which is useful
@@ -547,13 +551,18 @@ def load_output(db_file: str, sample_ids: list = None, replicate_ids: list = Non
                                     If None, loads all samples.
         replicate_ids (list, optional): List of specific replicate IDs to load. 
                                        If None, loads all replicates.
-        load_data (bool, optional): If True, deserializes the Data column. 
-                                   If False, only loads SampleID and ReplicateID. 
+        load_data (bool, optional): If True, deserializes the Data column.
+                                   If False, only loads SampleID and ReplicateID.
                                    Default is True.
-    
+        load_seed (bool, optional): If True, append a 'Seed' column with the random
+                                   seed PhysiCell used for each replicate (NULL for
+                                   rows written before seeds were recorded). Requires
+                                   a database created with the Seed column. Default False.
+
     Returns:
         pd.DataFrame: DataFrame with columns ['SampleID', 'ReplicateID', 'Data'] if load_data=True,
-                     or ['SampleID', 'ReplicateID'] if load_data=False. 
+                     or ['SampleID', 'ReplicateID'] if load_data=False, plus a trailing
+                     'Seed' column when load_seed=True.
                      When load_data=True, the Data column contains deserialized objects.
     
     Raises:
@@ -578,8 +587,9 @@ def load_output(db_file: str, sample_ids: list = None, replicate_ids: list = Non
     
     try:
         # Build the SQL query with optional filters
-        query = 'SELECT SampleID, ReplicateID{} FROM Output'.format(
-            ', Data' if load_data else ''
+        query = 'SELECT SampleID, ReplicateID{}{} FROM Output'.format(
+            ', Data' if load_data else '',
+            ', Seed' if load_seed else ''
         )
         conditions = []
         params = []
@@ -600,12 +610,18 @@ def load_output(db_file: str, sample_ids: list = None, replicate_ids: list = Non
         cursor.execute(query, params)
         output = cursor.fetchall()
         
+        columns = ['SampleID', 'ReplicateID']
         if load_data:
-            df_output = pd.DataFrame(output, columns=['SampleID', 'ReplicateID', 'Data'])
+            columns.append('Data')
+        if load_seed:
+            columns.append('Seed')
+
+        if load_data:
+            df_output = pd.DataFrame(output, columns=columns)
             # Deserialize the Data column
             df_output['Data'] = df_output['Data'].apply(_safe_pickle_loads)
         else:
-            df_output = pd.DataFrame(output, columns=['SampleID', 'ReplicateID'])
+            df_output = pd.DataFrame(output, columns=columns)
             # Placeholder column for consistency, dataframe is db from summary function or list of mcds
             df_output_test = load_output(db_file, sample_ids=[0], replicate_ids=[0])
             # If QoIs are already in the database and 'Data' column is not present
@@ -617,7 +633,11 @@ def load_output(db_file: str, sample_ids: list = None, replicate_ids: list = Non
             # Check if 'Data' column in df_qois_data is a DataFrame - Case of db generated by custom summary function
             elif isinstance(df_output_test['Data'].iloc[0], pd.DataFrame):
                 df_output['Data'] = [pd.DataFrame() for _ in range(len(df_output))]
-        
+
+        if load_seed:
+            # Nullable integer so rows without a recorded seed stay <NA> rather than NaN
+            df_output['Seed'] = df_output['Seed'].astype('Int64')
+
         return df_output
     
     except sqlite3.Error as e:

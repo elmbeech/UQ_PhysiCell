@@ -209,17 +209,27 @@ def migrate_to_zstd(input_db: str, output_db: str, verbose: bool = True) -> dict
             conn = sqlite3.connect(input_db)
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            cursor.execute(
-                "SELECT Data FROM Output WHERE SampleID=? AND ReplicateID=?",
-                (sample_id, replicate_id)
-            )
-            data_row = cursor.fetchone()
+            try:
+                cursor.execute(
+                    "SELECT Data, Seed FROM Output WHERE SampleID=? AND ReplicateID=?",
+                    (sample_id, replicate_id)
+                )
+                data_row = cursor.fetchone()
+                seed = data_row['Seed'] if data_row is not None else None
+            except sqlite3.OperationalError:
+                # Input database predates the Seed column
+                cursor.execute(
+                    "SELECT Data FROM Output WHERE SampleID=? AND ReplicateID=?",
+                    (sample_id, replicate_id)
+                )
+                data_row = cursor.fetchone()
+                seed = None
             conn.close()
-            
+
             if data_row is None:
                 logger.warning(f"No data found for SampleID={sample_id}, ReplicateID={replicate_id}")
                 continue
-            
+
             data_blob = bytes(data_row['Data']) if isinstance(data_row['Data'], memoryview) else data_row['Data']
             blob_size = len(data_blob)
             total_original_size += blob_size
@@ -230,7 +240,7 @@ def migrate_to_zstd(input_db: str, output_db: str, verbose: bool = True) -> dict
                 decompressed = decompress_data(data_blob)
                 
                 # Insert with compress=True to apply zstd compression
-                ma_db.insert_output(output_db, sample_id, replicate_id, decompressed, compress=True)
+                ma_db.insert_output(output_db, sample_id, replicate_id, decompressed, compress=True, seed=seed)
                 
                 # Calculate compressed size from what was just inserted
                 compressed_blob = compress_data(decompressed)
