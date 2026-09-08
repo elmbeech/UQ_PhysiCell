@@ -1,5 +1,6 @@
 import unittest
 import os
+import json
 import tempfile
 import logging
 import pandas as pd
@@ -213,6 +214,17 @@ class TestCalibrationContext(unittest.TestCase):
         # For multi-objective (2 QoIs)
         self.assertTrue('Multi-objective' in context.dic_metadata['BO_Method'])
 
+        # BO_Options is stored as a JSON string with the resolved BO configuration
+        self.assertIn('BO_Options', context.dic_metadata)
+        bo_options_record = json.loads(context.dic_metadata['BO_Options'])
+        self.assertEqual(bo_options_record['num_initial_samples'], 10)
+        self.assertEqual(bo_options_record['num_iterations'], 5)
+        self.assertEqual(bo_options_record['batch_size_per_iteration'], 1)
+        self.assertEqual(bo_options_record['use_exponential_fitness'], True)
+        self.assertEqual(bo_options_record['use_correlated_gp'], False)
+        self.assertEqual(bo_options_record['ref_point'], [0.0, 0.0])
+        self.assertIsNone(bo_options_record['custom_aggregation_func'])
+
     def test_single_objective_metadata(self):
         """Test metadata for single objective case."""
         single_qoi_functions = {'obj1': 'lambda df: df["metric1"].sum()'}
@@ -373,8 +385,9 @@ class TestRunBayesianOptimization(unittest.TestCase):
             mock_single_obj.assert_called_once()
 
     @patch('uq_physicell.bo.bo_context.os.path.exists')
+    @patch('uq_physicell.bo.bo_context.create_structure')
     @patch('uq_physicell.bo.bo_context.multi_objective_bayesian_optimization')
-    def test_resume_optimization(self, mock_multi_obj, mock_exists):
+    def test_resume_optimization(self, mock_multi_obj, mock_create_struct, mock_exists):
         """Test resuming optimization from existing database."""
         # Database exists
         mock_exists.return_value = True
@@ -397,7 +410,8 @@ class TestRunBayesianOptimization(unittest.TestCase):
         self.assertEqual(start_iteration, 3)
 
     @patch('uq_physicell.bo.bo_context.os.path.exists')
-    def test_additional_iterations(self, mock_exists):
+    @patch('uq_physicell.bo.bo_context.create_structure')
+    def test_additional_iterations(self, mock_create_struct, mock_exists):
         """Test additional iterations parameter."""
         # Database exists
         mock_exists.return_value = True

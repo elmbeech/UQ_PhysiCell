@@ -9,7 +9,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 # My local modules
-from uq_physicell.database.bo_db import load_parameter_space, load_metadata, load_qois, load_gp_models
+from uq_physicell.database.bo_db import load_parameter_space, load_metadata, load_qois, load_gp_models, migrate_bo_database
 
 
 def add_db_files_to_table(main_window):
@@ -21,21 +21,27 @@ def add_db_files_to_table(main_window):
         model_id = row_position + 1
         main_window.dic_table[model_id] = {"Database_path": file}
         try:
+            migrate_bo_database(file)  # upgrade an older calibration .db to the current schema
             main_window.dic_table[model_id]["Num_Params"] = load_parameter_space(file).shape[0]
-            main_window.dic_table[model_id]["Max hypervolume"] = np.max(load_gp_models(file)['Hypervolume'])
+            main_window.dic_table[model_id]["Score"] = np.max(load_gp_models(file)['Score'])
         except Exception as e:
             main_window.dic_table.pop(model_id, None)
-            QMessageBox.warning(main_window, "DB File not supported", f"Error occurred while loading parameters and hypervolumes from {os.path.basename(file)}: {e}")
+            QMessageBox.warning(main_window, "DB File not supported", f"Error occurred while loading parameters and scores from {os.path.basename(file)}: {e}")
             return
         if model_id > 1:
             # Check consistency with the previous file
             file_prev = main_window.dic_table[model_id - 1]["Database_path"]
             try:
-                check_consistency_dbs(load_metadata(file_prev), load_metadata(file), load_qois(file_prev), load_qois(file))
+                consistency_warnings = check_consistency_dbs(load_metadata(file_prev), load_metadata(file), load_qois(file_prev), load_qois(file))
             except ValueError as e:
                 main_window.dic_table.pop(model_id, None)
                 QMessageBox.warning(main_window, "Inconsistent DB Files", f"Database file {os.path.basename(file)} has inconsistent QoIs or BO setup compared to previous files: {e}")
-                return 
+                return
+            if consistency_warnings:
+                QMessageBox.warning(
+                    main_window, "Model comparison caveats",
+                    f"{os.path.basename(file)} was added, but note:\n\n" + "\n\n".join(f"• {w}" for w in consistency_warnings),
+                )
 
         main_window.db_table.insertRow(row_position)
         # Model number (auto-increment)
@@ -44,8 +50,8 @@ def add_db_files_to_table(main_window):
         main_window.db_table.setItem(row_position, 1, QTableWidgetItem(os.path.basename(file)))
         # Number of Parameters
         main_window.db_table.setItem(row_position, 2, QTableWidgetItem(str(main_window.dic_table[model_id]["Num_Params"])))
-        # Hypervolume
-        main_window.db_table.setItem(row_position, 3, QTableWidgetItem(f"{main_window.dic_table[model_id]['Max hypervolume']:.4e}"))
+        # Score (hypervolume for multi-objective, best fitness for single-objective)
+        main_window.db_table.setItem(row_position, 3, QTableWidgetItem(f"{main_window.dic_table[model_id]['Score']:.4e}"))
         # Add remove button
         remove_btn = QPushButton("Remove")
         remove_btn.clicked.connect(lambda _, r=row_position: remove_db_row(main_window, r))
@@ -58,43 +64,95 @@ def remove_db_row(main_window, row):
     for i in range(main_window.db_table.rowCount()):
         main_window.db_table.setItem(i, 0, QTableWidgetItem(str(i + 1)))
 
+# BO_Options entries that define the objective / score itself. A mismatch makes the
+# scores meaningless to compare, so it is a hard error. Everything else (parameter
+# space, iteration budget, initial samples, workers, replicates, fixed params, ...)
+# is allowed to differ between the models being compared.
+_SCORE_DEFINING_OPTIONS = ("use_exponential_fitness", "use_correlated_gp", "ref_point", "custom_aggregation_func")
+
+
 def check_consistency_dbs(df_metadata_prev, df_metadata, df_qois_prev, df_qois):
     """
-    Check if the parameter space and BO setup are consistent between two database files.
-    Raises a ValueError if they are not consistent."""
-    if 'BO_Options' not in df_metadata.columns or 'BO_Options' not in df_metadata_prev.columns:
-        raise ValueError("Missing BO setup (BO_Options) in the database file.")
-    bo_setup_current = df_metadata['BO_Options'].iloc[0]
-    bo_setup_prev = df_metadata_prev['BO_Options'].iloc[0]
-    if bo_setup_current is None or bo_setup_prev is None:
-        raise ValueError("Missing BO setup (BO_Options) in the database file.")
-    # Extract the BO setup dictionary from the metadata for both current and previous files
-    bo_setup_current = json.loads(bo_setup_current)
-    bo_setup_prev = json.loads(bo_setup_prev)
+    Check that two calibration databases produce comparable scores for model selection.
 
-    # Check the parameter space and BO options for consistency
-    if bo_setup_prev != bo_setup_current:
-        raise ValueError(f"Inconsistent BO setup between files. Previous: {bo_setup_prev}, Current: {bo_setup_current}")
-    if not df_qois.equals(df_qois_prev):
-        raise ValueError(f"Inconsistent QoIs between files. Previous: {df_qois_prev}, Current: {df_qois}")
-    
-def plot_complexity_vs_hypervolume(main_window):
+    Hard-compared (raise ValueError): the score-defining BO_Options entries
+    (use_exponential_fitness, use_correlated_gp, ref_point, custom_aggregation_func)
+    and the full QoIs table (names, observed-data columns, distance functions and weights).
+
+    Soft-compared (returned as warnings, not fatal): ObsData_Path, summary_function
+    and botorch_version - differences here *may* still allow a fair comparison but are
+    worth flagging to the user.
+
+    NOT compared: parameter space, iteration budget, worker/replicate counts, fixed
+    params or any other tuning knob.
+
+    Returns:
+        list[str]: soft-warning messages (empty if none).
+
+    Raises:
+        ValueError: if the databases are not comparable.
+    """
+    for df in (df_metadata_prev, df_metadata):
+        if 'BO_Options' not in df.columns or df['BO_Options'].iloc[0] is None:
+            raise ValueError("Missing BO setup (BO_Options) in the database file.")
+    opts_prev = json.loads(df_metadata_prev['BO_Options'].iloc[0])
+    opts_current = json.loads(df_metadata['BO_Options'].iloc[0])
+
+    for key in _SCORE_DEFINING_OPTIONS:
+        if opts_prev.get(key) != opts_current.get(key):
+            raise ValueError(
+                f"Inconsistent '{key}' between calibrations "
+                f"(previous: {opts_prev.get(key)}, current: {opts_current.get(key)}); "
+                f"their scores are not comparable."
+            )
+
+    qois_prev = df_qois_prev.sort_values('QoI_Name').reset_index(drop=True)
+    qois_current = df_qois.sort_values('QoI_Name').reset_index(drop=True)
+    if not qois_current.equals(qois_prev):
+        raise ValueError(f"Inconsistent QoIs between files.\nPrevious:\n{qois_prev}\nCurrent:\n{qois_current}")
+
+    # Soft checks - flag but do not block the comparison
+    def _meta(df, col):
+        return df[col].iloc[0] if col in df.columns and len(df) else None
+
+    consistency_warnings = []
+    prev_obs, cur_obs = _meta(df_metadata_prev, 'ObsData_Path'), _meta(df_metadata, 'ObsData_Path')
+    if prev_obs != cur_obs:
+        consistency_warnings.append(
+            f"Observed-data path differs (previous: {prev_obs}, current: {cur_obs}). "
+            f"Scores are only comparable if the underlying data is identical."
+        )
+    if opts_prev.get('summary_function') != opts_current.get('summary_function'):
+        consistency_warnings.append(
+            f"summary_function differs (previous: {opts_prev.get('summary_function')}, "
+            f"current: {opts_current.get('summary_function')})."
+        )
+    prev_bt, cur_bt = _meta(df_metadata_prev, 'botorch_version'), _meta(df_metadata, 'botorch_version')
+    if prev_bt != cur_bt:
+        consistency_warnings.append(
+            f"botorch version differs (previous: {prev_bt}, current: {cur_bt}); "
+            f"hypervolume computation may not be identical."
+        )
+    return consistency_warnings
+
+
+def plot_complexity_vs_score(main_window):
     if main_window.db_table.rowCount() == 0:
         QMessageBox.warning(main_window, "No DB Files", "Please load at least one calibration .db file.")
         return
-    
+
     # Plot Comparison
     main_window.comparison_figure.clear()
     ax = main_window.comparison_figure.add_subplot(111)
     max_param = 1; min_param = 0
     for model_id, dict_info in main_window.dic_table.items():
-        ax.scatter(dict_info["Num_Params"], dict_info["Max hypervolume"], label=f"Model {model_id}")
+        ax.scatter(dict_info["Num_Params"], dict_info["Score"], label=f"Model {model_id}")
         if dict_info["Num_Params"] > max_param:
             max_param = dict_info["Num_Params"]
         if dict_info["Num_Params"] < min_param:
             min_param = dict_info["Num_Params"]
     ax.set_xlabel('Number of Parameters')
-    ax.set_ylabel('Hypervolume')
+    ax.set_ylabel('Score')
     # Integer ticks from min_param to max_param, so a single loaded model still shows a meaningful scale
     ax.set_xticks(range(min_param, max_param + 2, 1))
     ax.set_xlim(min_param - 0.5, max_param + 0.5)
@@ -116,16 +174,16 @@ def create_tab4(main_window):
     layout_tab4.addWidget(load_db_btn)
 
     # Process and plot button
-    process_btn = QPushButton("Plot Complexity vs. Hypervolume")
+    process_btn = QPushButton("Plot Complexity vs. Score")
     process_btn.setStyleSheet("background-color: lightgreen; color: black")
-    process_btn.clicked.connect(lambda: plot_complexity_vs_hypervolume(main_window))
+    process_btn.clicked.connect(lambda: plot_complexity_vs_score(main_window))
     layout_tab4.addWidget(process_btn)
 
     # Table for models
     main_window.dic_table = {}
     main_window.db_table = QTableWidget()
     main_window.db_table.setColumnCount(5)
-    main_window.db_table.setHorizontalHeaderLabels(["Model", "Database", "Number of Parameters", "Max hypervolume", "Remove"])
+    main_window.db_table.setHorizontalHeaderLabels(["Model", "Database", "Number of Parameters", "Best Score", "Remove"])
     header = main_window.db_table.horizontalHeader()
     for col in range(main_window.db_table.columnCount()):
         header.setSectionResizeMode(col, QHeaderView.Stretch)
@@ -135,7 +193,7 @@ def create_tab4(main_window):
     header.setStyleSheet("QHeaderView::section { background-color: lightgray; color: black; font-weight: bold; }")
 
     # Matplotlib Figure for Comparison plot
-    plot_label = QLabel("<b>Model Comparison - Complexity vs. Hypervolume</b>")
+    plot_label = QLabel("<b>Model Comparison - Complexity vs. Score</b>")
     plot_label.setAlignment(Qt.AlignCenter)
     layout_tab4.addWidget(plot_label)
     main_window.comparison_figure = Figure(figsize=(5,3), layout="tight")
