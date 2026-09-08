@@ -176,10 +176,10 @@ class PhysiCell_Model:
     def _copy(self):
         return copy.deepcopy(self)
 
-    def RunModel(self, SampleID: int, ReplicateID: int, Parameters: Union[np.ndarray, dict] = dict(), ParametersRules: Union[np.ndarray, dict] = dict(), RemoveConfigFile: bool = True, SummaryFunction: Union[None, str] = None) -> Union[None, pd.DataFrame]:
-        """ 
+    def RunModel(self, SampleID: int, ReplicateID: int, Parameters: Union[np.ndarray, dict] = dict(), ParametersRules: Union[np.ndarray, dict] = dict(), RemoveConfigFile: bool = True, SummaryFunction: Union[None, str] = None, random_seed: Union[int, None] = None) -> Union[None, pd.DataFrame]:
+        """
         Run a single simulation with specified parameters.
-        
+
         Args:
             SampleID (int): Identifier for the parameter sample
             ReplicateID (int): Identifier for the simulation replicate
@@ -187,8 +187,12 @@ class PhysiCell_Model:
             ParametersRules (np.ndarray or dict, optional): Parameter values for RULES configuration
             RemoveConfigFile (bool, optional): If True, removes the generated XML and RULES files after simulation
             SummaryFunction (function, optional): Function to summarize simulation output
+            random_seed (int, optional): If given, this exact seed is written to the XML
+                (``<random_seed>``); otherwise the reference XML's own behaviour is kept
+                (``system_clock`` for ``options/random_seed``, a random int for
+                ``user_parameters/random_seed``).
         """
-        return _run_model(self, SampleID, ReplicateID, Parameters, ParametersRules, RemoveConfigFile, SummaryFunction)
+        return _run_model(self, SampleID, ReplicateID, Parameters, ParametersRules, RemoveConfigFile, SummaryFunction, random_seed)
     def run_simulation_subprocess(self, XMLFile, sample_id=None, replicate_id=None):
         """
         Start the simulation as a subprocess and return the process handle.
@@ -423,7 +427,7 @@ def _read_random_seed(output_folder: str) -> Union[int, None]:
     except (OSError, ValueError):
         return None
 
-def _setup_model_input(model: PhysiCell_Model, SampleID: int, ReplicateID: int, parameters_input: Union[np.ndarray, dict], parameters_rules_input: Union[np.ndarray, dict]) -> None:
+def _setup_model_input(model: PhysiCell_Model, SampleID: int, ReplicateID: int, parameters_input: Union[np.ndarray, dict], parameters_rules_input: Union[np.ndarray, dict], random_seed: Union[int, None] = None) -> None:
     try:
         if model.verbose:
             print(f"\t\t\t>>> Checking parameters input ...")
@@ -482,13 +486,14 @@ def _setup_model_input(model: PhysiCell_Model, SampleID: int, ReplicateID: int, 
     
     try:
         _get_xml_element_value(model.xml_ref_root, './/options/random_seed')
-        dic_xml_parameters['.//options/random_seed'] = "system_clock"
+        seed_xpath, seed_default = './/options/random_seed', "system_clock"
     except ValueError:
         try:
             _get_xml_element_value(model.xml_ref_root, './/user_parameters/random_seed')
-            dic_xml_parameters['.//user_parameters/random_seed'] = random.randint(0, 4294967295)
+            seed_xpath, seed_default = './/user_parameters/random_seed', random.randint(0, 4294967295)
         except ValueError as e:
             raise ValueError(f"Error in setting random seed. {e}")
+    dic_xml_parameters[seed_xpath] = int(random_seed) if random_seed is not None else seed_default
     for idx, param_key, param_name in zip(range(len(model.XML_parameters_variable)), model.XML_parameters_variable.keys(), model.XML_parameters_variable.values()):
         if isinstance(parameters_input, dict):
             dic_xml_parameters[param_key] = parameters_input[param_name]
@@ -503,7 +508,7 @@ def _setup_model_input(model: PhysiCell_Model, SampleID: int, ReplicateID: int, 
     except ValueError as e:
         raise ValueError(f"Error in generating XML file! {e}")
 
-def _run_model(model: PhysiCell_Model, SampleID: int, ReplicateID: int, Parameters: Union[np.ndarray, dict] = dict(), ParametersRules: Union[np.ndarray, dict] = dict(), RemoveConfigFile: bool = True, SummaryFunction: Union[None, str] = None) -> Union[None, pd.DataFrame]:
+def _run_model(model: PhysiCell_Model, SampleID: int, ReplicateID: int, Parameters: Union[np.ndarray, dict] = dict(), ParametersRules: Union[np.ndarray, dict] = dict(), RemoveConfigFile: bool = True, SummaryFunction: Union[None, str] = None, random_seed: Union[int, None] = None) -> Union[None, pd.DataFrame]:
     if model.verbose:
         print(f"\t> Running - Sample:{SampleID}, Replicate: {ReplicateID}, Parameters XML: {Parameters}, Parameters rules: {ParametersRules}...")
     model._last_random_seed = None
@@ -511,7 +516,7 @@ def _run_model(model: PhysiCell_Model, SampleID: int, ReplicateID: int, Paramete
         try:
             if model.verbose:
                 print(f"\t\t>> Setting up model input ...")
-            _setup_model_input(model, SampleID, ReplicateID, Parameters, parameters_rules_input=ParametersRules)
+            _setup_model_input(model, SampleID, ReplicateID, Parameters, parameters_rules_input=ParametersRules, random_seed=random_seed)
         except ValueError as e:
             raise ValueError(f"Error in setup_model_input! (Sample: {SampleID} and Replicate: {ReplicateID}).\n{e}")
 
