@@ -401,7 +401,14 @@ def run_simulations(context: ModelAnalysisContext):
     else:
         # Three lists with size NumSimulations from check_existing_sa
         if rank == 0: context.logger.info(f"Generating {len(All_Samples)} simulations")
-    
+
+    # Distinct random seed per simulation, drawn once in the parent (rank 0 for MPI).
+    # Prevents parallel replicates of the same sample from resolving to the same
+    # system-clock seed inside PhysiCell.
+    All_Seeds = np.random.default_rng().choice(2**32, size=len(All_Samples), replace=False).tolist() if rank == 0 else None
+    if use_mpi:
+        All_Seeds = comm.bcast(All_Seeds, root=0)
+
     ###################################
     # Running using concurrent.futures
     ###################################
@@ -433,6 +440,7 @@ def run_simulations(context: ModelAnalysisContext):
                     #drop_columns,
                     custom_summary_function=context.summary_function,
                     return_seed=True,
+                    random_seed=All_Seeds[ind_sim],
                 ))
              
             # Use as_completed with a short timeout to avoid blocking when cancelled
@@ -506,7 +514,7 @@ def run_simulations(context: ModelAnalysisContext):
             try:
                 if context.summary_function:
                     result_data_nonserialized = PhysiCellModel.RunModel(
-                        All_Samples[ind_sim], All_Replicates[ind_sim], ParametersXML, ParametersRules, RemoveConfigFile=True, SummaryFunction=context.summary_function)
+                        All_Samples[ind_sim], All_Replicates[ind_sim], ParametersXML, ParametersRules, RemoveConfigFile=True, SummaryFunction=context.summary_function, random_seed=All_Seeds[ind_sim])
                     result_data = pickle.dumps(result_data_nonserialized)
                     seed = PhysiCellModel._last_random_seed
                 else:
@@ -522,6 +530,7 @@ def run_simulations(context: ModelAnalysisContext):
                         #drop_columns,
                         #custom_summary_function,
                         return_seed=True,
+                        random_seed=All_Seeds[ind_sim],
                     )
 
             except Exception as e:
@@ -556,12 +565,12 @@ def run_simulations(context: ModelAnalysisContext):
             ParametersRules = {key: All_Parameters[ind_sim][key] for key in params_rules} if params_rules else np.array([])
             if context.summary_function:
                 result_data_nonserialized = PhysiCellModel.RunModel(
-                    All_Samples[ind_sim], All_Replicates[ind_sim], ParametersXML, ParametersRules, RemoveConfigFile=True, SummaryFunction=context.summary_function)
+                    All_Samples[ind_sim], All_Replicates[ind_sim], ParametersXML, ParametersRules, RemoveConfigFile=True, SummaryFunction=context.summary_function, random_seed=All_Seeds[ind_sim])
                 result_data = pickle.dumps(result_data_nonserialized)
                 seed = PhysiCellModel._last_random_seed
             else:
                 _, _, result_data, seed = run_replicate(
-                    PhysiCell_Model=PhysiCellModel,
+                    PhysiCellModel=PhysiCellModel,
                     sample_id=All_Samples[ind_sim],
                     replicate_id=All_Replicates[ind_sim],
                     ParametersXML=ParametersXML,
@@ -572,6 +581,7 @@ def run_simulations(context: ModelAnalysisContext):
                     #drop_columns,
                     #custom_summary_function,
                     return_seed=True,
+                    random_seed=All_Seeds[ind_sim],
                 )
 
             # Write to the database directly (no locks or MPI synchronization needed)

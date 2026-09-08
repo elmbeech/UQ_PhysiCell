@@ -45,7 +45,7 @@ def mock_run_replicate_serializable(
     ParametersXML, ParametersRules,
     qoi_functions=None, qoi_def={},
     return_binary_output=True, drop_columns=None,
-    custom_summary_function=None, return_seed=False,
+    custom_summary_function=None, return_seed=False, random_seed=None,
 ):
     result = (sample_id, replicate_id, pickle.dumps({"out1": 1.0}))
     return result + (None,) if return_seed else result
@@ -54,11 +54,11 @@ def mock_run_replicate_serializable(
 # ─── shared patch set (applied per test function) ───────────────────────────
 
 def mock_run_replicate(
-    PhysiCell_Model=None, sample_id=None, replicate_id=None,
+    PhysiCellModel=None, sample_id=None, replicate_id=None,
     ParametersXML=None, ParametersRules=None,
     qoi_functions=None, qoi_def={},
     return_binary_output=True, drop_columns=None,
-    custom_summary_function=None, return_seed=False,
+    custom_summary_function=None, return_seed=False, random_seed=None,
 ):
     result = (sample_id, replicate_id, pickle.dumps({"out1": 1.0}))
     return result + (None,) if return_seed else result
