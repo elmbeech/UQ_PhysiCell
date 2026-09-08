@@ -127,10 +127,15 @@ def get_global_SA_parameters(db_file):
         perturbation = df_parameter_space['perturbation'].iloc[id]
         try:
             global_SA_parameters[param]["perturbation"] = float(perturbation)
-        except Exception as e:
-            print(f"Warning: Could not convert perturbation ({perturbation}) to float for parameter {param}.")
-            # Calculate perturbation as percentage based on bounds and ref_value
-            global_SA_parameters[param]["perturbation"] = 100.0 * (df_parameter_space['upper_bound'].iloc[id]/df_parameter_space['ref_value'].iloc[id] - 1.0)
+        except (TypeError, ValueError):
+            # Calculate perturbation as percentage based on bounds and ref_value, when possible.
+            # Not required for global SA (which only uses lower_bound/upper_bound), so it is
+            # left as None when ref_value is unavailable (e.g. LHS/Sobol parameter spaces).
+            ref_value = df_parameter_space['ref_value'].iloc[id]
+            if ref_value:
+                global_SA_parameters[param]["perturbation"] = 100.0 * (df_parameter_space['upper_bound'].iloc[id]/ref_value - 1.0)
+            else:
+                global_SA_parameters[param]["perturbation"] = None
     return global_SA_parameters
 
 def get_local_SA_parameters(db_file):

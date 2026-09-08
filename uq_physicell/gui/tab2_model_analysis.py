@@ -1124,8 +1124,14 @@ def update_global_inputs(main_window):
             # Store bounds in global_SA_parameters
             main_window.global_SA_parameters[selected_param]["lower_bound"] = lower_bound
             main_window.global_SA_parameters[selected_param]["upper_bound"] = upper_bound
-        except ValueError:
-            main_window.update_output_tab2(main_window, "Error: Invalid reference value or range percentage.")
+        except (TypeError, ValueError):
+            # ref_value/perturbation are unavailable (e.g. LHS/Sobol parameter spaces loaded
+            # from a database) — keep the bounds already stored (lower_bound/upper_bound come
+            # straight from the database) and just show them as-is.
+            if "lower_bound" in param_data and "upper_bound" in param_data:
+                main_window.global_bounds.setText(f"{param_data['lower_bound']:.3e}, {param_data['upper_bound']:.3e}")
+            else:
+                main_window.update_output_tab2(main_window, "Error: Invalid reference value or range percentage.")
 
         # Update global_SA_parameters when editing is finished
         main_window.global_ref_value_input.editingFinished.connect(lambda: main_window.update_global_SA_reference(main_window))
