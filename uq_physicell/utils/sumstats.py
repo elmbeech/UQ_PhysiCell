@@ -7,6 +7,9 @@ from typing import Union
 import re
 import inspect, ast
 import textwrap
+import errno
+import time
+import warnings
     
 def summ_func_FinalPopLiveDead(outputPath:str,summaryFile:Union[str,None], dic_params:dict, SampleID:int, ReplicateID:int) -> Union[pd.DataFrame,None]:
     """
@@ -285,7 +288,32 @@ def recreate_qoi_functions(qoi_functions:dict, qoi_def:dict={}) -> dict:
         except Exception as e:
             raise ValueError(f"Error recreating QoI function '{qoi_name}': {e}")
     return recreated_qoi_funcs
-    
+
+def _safe_rmtree(path: str, retries: int = 5, delay: float = 0.5) -> None:
+    """Remove a replicate output folder, tolerating transient ENOTEMPTY errors.
+
+    On network filesystems (e.g. NFS), deleting a file that is still open
+    elsewhere (a delayed writeback, a lagging metadata cache, ...) gets
+    silently renamed to a hidden ``.nfsXXXXX`` sentinel instead of actually
+    removed, which makes the directory appear non-empty to ``rmtree`` right
+    after a simulation finishes. Retry briefly before giving up, and never let
+    cleanup of one replicate's folder kill the whole run.
+    """
+    last_exc = None
+    for attempt in range(retries):
+        try:
+            rmtree(path)
+            return
+        except OSError as e:
+            last_exc = e
+            if e.errno != errno.ENOTEMPTY:
+                break
+            time.sleep(delay)
+    # Best-effort cleanup: drop what we can and move on rather than aborting
+    # the calling worker process over a leftover output folder.
+    rmtree(path, ignore_errors=True)
+    warnings.warn(f"Could not fully remove output folder '{path}' after {retries} retries: {last_exc}")
+
 def summary_function(outputPath:str, summaryFile:Union[str, None], dic_params:dict, SampleID:int, ReplicateID:int, qoi_functions:dict, RemoveFolder:bool=True, drop_columns:Union[list, None]=None,) -> Union[pd.DataFrame, None]:
     """
     Generic summary function for creating custom QoIs (Quantities of Interest) based on df_cell elements.
@@ -352,7 +380,7 @@ def summary_function(outputPath:str, summaryFile:Union[str, None], dic_params:di
         raise RuntimeError(f"An error occurred while processing QoIs: {e}")
 
     # Optional: Remove replicate output folder
-    if (RemoveFolder): rmtree(outputPath)
+    if (RemoveFolder): _safe_rmtree(outputPath)
 
     # Save to file or return DataFrame
     if summaryFile:
