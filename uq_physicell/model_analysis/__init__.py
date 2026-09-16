@@ -24,6 +24,7 @@ from .sensitivity_analysis import (
 )
 
 from .visualization import (
+    get_mcse_legend_handles,
     plot_qoi_over_time,
     plot_global_sa_results,
     plot_local_sa_results,
@@ -62,6 +63,7 @@ __all__ = [
     'get_global_SA_parameters',
     'get_local_SA_parameters',
     'get_sa_results',
+    'get_mcse_legend_handles',
     'plot_qoi_over_time',
     'plot_global_sa_results',
     'plot_local_sa_results',

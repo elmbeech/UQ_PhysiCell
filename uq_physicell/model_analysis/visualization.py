@@ -41,7 +41,7 @@ def convert_df_to_df_over_time(df_summary, selected_qoi) -> pd.DataFrame:
     })
     return plot_data
 
-def _get_mcse_legend_handles() -> list[Patch]:
+def get_mcse_legend_handles() -> list[Patch]:
     """Build the legend handles for the standard relative-MCSE reliability bands.
 
     Used internally by plot_qoi_over_time (when plot_mcse_range=True) and can be reused
@@ -73,7 +73,7 @@ def plot_qoi_over_time(df_plot, selected_qoi, ax, plot_mcse_range=False, show_le
         selected_qoi (str): Name of the QoI to plot.
         ax (matplotlib.axes.Axes): Axis to draw on.
         plot_mcse_range (bool, optional): If True, overlay the standard relative-MCSE
-            reliability bands (see _get_mcse_legend_handles) as colored horizontal spans.
+            reliability bands (see get_mcse_legend_handles) as colored horizontal spans.
             Intended for use with a relative-MCSE DataFrame as df_plot. Defaults to False.
         show_legend (bool, optional): If False, suppress the per-axes sample legend and
             MCSE legend instead of drawing them — use this when combining several subplots'
@@ -126,7 +126,7 @@ def plot_qoi_over_time(df_plot, selected_qoi, ax, plot_mcse_range=False, show_le
             sample_legend.remove()
 
     if plot_mcse_range:
-        mcse_handles = _get_mcse_legend_handles()
+        mcse_handles = get_mcse_legend_handles()
         if show_legend:
             # Place MCSE legend below the plot, then call tight_layout to adjust figure
             mcse_legend = ax.legend(
