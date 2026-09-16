@@ -144,6 +144,151 @@ def test_configuration_validation():
             abc_options={'max_populations': 5}
         )
 
+def test_model_selection_specs():
+    """abc_options['models'] builds one ModelSpec per candidate with per-model IO subfolders."""
+    from uq_physicell.abc import CalibrationContext, ModelSpec
+    from pyabc import Distribution, RV
+
+    ini_content = "[strucA]\nnumReplicates = 4\n\n[strucB]\nnumReplicates = 2\n"
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ini', delete=False) as ini_file:
+        ini_file.write(ini_content)
+        ini_path = ini_file.name
+
+    obs_data = {'QoI1': np.array([1.0, 1.1, 1.2])}
+    obs_data_columns = {'QoI1': 'QoI1_data'}
+    qoi_functions = {'QoI1': 'lambda df: df["QoI1"].values'}
+    distance_functions = {'QoI1': {'function': 'euclidean', 'weight': 1.0}}
+    prior_a = Distribution(param1=RV('uniform', 0, 1.0))
+    prior_b = Distribution(param1=RV('uniform', 0, 1.0), param2=RV('uniform', 0, 2.0))
+
+    try:
+        ctx = CalibrationContext(
+            db_path="dummy.db",
+            obsData=obs_data,
+            obsData_columns=obs_data_columns,
+            qoi_functions=qoi_functions,
+            distance_functions=distance_functions,
+            abc_options={
+                'max_populations': 2,
+                'sampler': 'multicore',
+                'num_workers': 2,
+                'models': [
+                    {'name': 'hypA', 'model_config': {'ini_path': ini_path, 'struc_name': 'strucA'},
+                     'prior': prior_a},
+                    {'name': 'hypB', 'model_config': {'ini_path': ini_path, 'struc_name': 'strucB'},
+                     'prior': prior_b, 'fixed_params': {'k': 1.0}, 'num_replicates': 3},
+                ],
+            },
+        )
+
+        assert ctx.model_selection is True
+        assert ctx.num_models == 2
+        assert [m.name for m in ctx.models] == ['hypA', 'hypB']
+        assert isinstance(ctx.models[0], ModelSpec)
+        # replicate counts: from ini / explicit override
+        assert ctx.models[0].num_replicates == 4
+        assert ctx.models[1].num_replicates == 3
+        # per-model IO isolation auto-applied for multi-model runs
+        assert ctx.models[0].model_config['output_folder'] == 'hypA/'
+        assert ctx.models[1].model_config['input_folder'] == 'hypB/'
+        # back-compat accessors delegate to models[0]
+        assert ctx.prior is ctx.models[0].prior
+        assert ctx.fixed_params == {}
+        # one pyABC wrapper per model, uniquely named
+        names = {ctx.create_model_wrapper(m, ctx.workers_inner).__name__ for m in ctx.models}
+        assert names == {'run_physicell_hypA', 'run_physicell_hypB'}
+    finally:
+        if os.path.exists(ini_path):
+            os.unlink(ini_path)
+
+
+def test_model_selection_validation():
+    """Invalid model-selection specs raise ValueError."""
+    from uq_physicell.abc import CalibrationContext
+    from pyabc import Distribution, RV
+
+    common = dict(
+        db_path="dummy.db",
+        obsData={'QoI1': [1, 2, 3]},
+        obsData_columns={'QoI1': 'QoI1'},
+        qoi_functions={'QoI1': 'lambda x: x'},
+        distance_functions={'QoI1': {'function': 'euclidean', 'weight': 1.0}},
+    )
+    prior = Distribution(param1=RV('uniform', 0, 1.0))
+    mc = {'ini_path': 'x.ini', 'struc_name': 's', 'numReplicates': 1}
+
+    # neither models nor model_config/prior
+    with pytest.raises(ValueError):
+        CalibrationContext(abc_options={}, **common)
+    # model entry missing required 'prior'
+    with pytest.raises(ValueError):
+        CalibrationContext(abc_options={'models': [{'name': 'a', 'model_config': mc}]}, **common)
+    # non-unique names
+    with pytest.raises(ValueError):
+        CalibrationContext(abc_options={'models': [
+            {'name': 'a', 'model_config': mc, 'prior': prior},
+            {'name': 'a', 'model_config': mc, 'prior': prior},
+        ]}, **common)
+    # unsafe name
+    with pytest.raises(ValueError):
+        CalibrationContext(abc_options={'models': [
+            {'name': 'a/b', 'model_config': mc, 'prior': prior},
+        ]}, **common)
+
+
+def test_model_selection_db_tables():
+    """Metadata NULLs the single-model columns for a selection run; Models has one row per candidate."""
+    import sqlite3
+    from uq_physicell.abc import CalibrationContext
+    from uq_physicell.abc.utils import insert_metadata_db, insert_models_db
+    from pyabc import Distribution, RV
+
+    ini_content = "[strucA]\nnumReplicates = 2\n\n[strucB]\nnumReplicates = 2\n"
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ini', delete=False) as ini_file:
+        ini_file.write(ini_content)
+        ini_path = ini_file.name
+    db_path = tempfile.NamedTemporaryFile(suffix='.db', delete=False).name
+
+    common = dict(
+        obsData={'QoI1': np.array([1.0, 1.1])},
+        obsData_columns={'QoI1': 'QoI1_data'},
+        qoi_functions={'QoI1': 'lambda df: df["QoI1"].values'},
+        distance_functions={'QoI1': {'function': 'euclidean', 'weight': 1.0}},
+    )
+    prior = Distribution(param1=RV('uniform', 0, 1.0))
+
+    try:
+        # single model -> Metadata carries ini/struc
+        ctx1 = CalibrationContext(db_path=db_path, model_config={'ini_path': ini_path, 'struc_name': 'strucA'},
+                                  prior=prior, abc_options={}, **common)
+        insert_metadata_db(db_path, ctx1)
+        insert_models_db(db_path, ctx1)
+        conn = sqlite3.connect(db_path)
+        assert conn.execute("SELECT Ini_File_Path, StructureName FROM Metadata").fetchone() == (ini_path, 'strucA')
+        assert conn.execute("SELECT COUNT(*) FROM Models").fetchone()[0] == 1
+        conn.close()
+
+        # model selection -> Metadata NULLs ini/struc, Models has both rows
+        ctx2 = CalibrationContext(db_path=db_path, abc_options={'models': [
+            {'name': 'A', 'model_config': {'ini_path': ini_path, 'struc_name': 'strucA'}, 'prior': prior},
+            {'name': 'B', 'model_config': {'ini_path': ini_path, 'struc_name': 'strucB'}, 'prior': prior},
+        ]}, **common)
+        insert_metadata_db(db_path, ctx2)
+        insert_models_db(db_path, ctx2)
+        conn = sqlite3.connect(db_path)
+        assert conn.execute("SELECT Ini_File_Path, StructureName FROM Metadata").fetchone() == (None, None)
+        rows = conn.execute("SELECT ModelIndex, Name, StructureName FROM Models ORDER BY ModelIndex").fetchall()
+        assert rows == [(0, 'A', 'strucA'), (1, 'B', 'strucB')]
+        # fingerprint columns exist (values may be NULL when the model can't be instantiated)
+        cols = {c[1] for c in conn.execute("PRAGMA table_info(Models)")}
+        assert {'Ini_Hash', 'XML_Hash', 'Rules_Hash', 'Structure_Config_Hash', 'Effective_Run_Hash'} <= cols
+        conn.close()
+    finally:
+        for p in (ini_path, db_path):
+            if os.path.exists(p):
+                os.unlink(p)
+
+
 def main():
     """Run all tests."""
     print("🧪 Testing ABC CalibrationContext")

@@ -123,6 +123,13 @@ def run_replicate_serializable(PhysiCellModel_conf:dict, sample_id:int, replicat
     except Exception as e:
         raise ValueError(f"Error initializing PhysiCell model: {e}")
 
+    # Optional per-config IO subfolders (appended, matching the ABC/BO convention).
+    # Used e.g. to isolate concurrent candidate models during ABC-SMC model selection.
+    if PhysiCellModel_conf.get('input_folder'):
+        PhysiCellModel.input_folder += PhysiCellModel_conf['input_folder']
+    if PhysiCellModel_conf.get('output_folder'):
+        PhysiCellModel.output_folder += PhysiCellModel_conf['output_folder']
+
     return run_replicate(
         PhysiCellModel=PhysiCellModel,
         sample_id=sample_id,

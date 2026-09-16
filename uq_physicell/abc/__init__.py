@@ -7,10 +7,12 @@ with enhanced strategies for model selection using pyABC.
 
 from .abc_context import (
     CalibrationContext,
+    ModelSpec,
     run_abc_calibration,
 )
 
 __all__ = [
     'CalibrationContext',
+    'ModelSpec',
     'run_abc_calibration',
 ]

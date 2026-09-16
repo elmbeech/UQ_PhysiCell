@@ -1,6 +1,8 @@
 import os
+import re
 import sys
 import logging
+from dataclasses import dataclass, field
 from typing import Union, Optional, Dict, List, Callable, Any
 import configparser
 
@@ -16,9 +18,37 @@ from dask.distributed import Client, get_worker
 
 # UQ PhysiCell imports
 from uq_physicell import PhysiCell_Model
-from uq_physicell.abc.utils import insert_adaptive_weights_db, insert_metadata_db
+from uq_physicell.abc.utils import (
+    insert_adaptive_weights_db,
+    insert_metadata_db,
+    insert_models_db,
+    insert_model_probabilities_db,
+)
 from uq_physicell.utils import run_replicate_serializable
 from ..utils.sumstats import _convert_qoi_function_to_string
+
+
+@dataclass
+class ModelSpec:
+    """One candidate model for ABC-SMC calibration / model selection.
+
+    Attributes:
+        name (str): Unique, filesystem-safe label. Drives the pyABC model-function
+            name, the per-model IO subfolder (multi-model runs) and the DB keys.
+        model_config (dict): PhysiCell model configuration. Requires ``ini_path`` and
+            ``struc_name``; may also carry ``numReplicates``, ``input_folder`` and
+            ``output_folder``.
+        prior (Distribution): Prior over this model's parameters. Models may have
+            different parameters / dimensionality.
+        fixed_params (dict): Parameters held fixed for this model.
+        num_replicates (int): Replicates per parameter set. Resolved from
+            ``model_config`` / the ini file during context construction.
+    """
+    name: str
+    model_config: dict
+    prior: "Distribution"
+    fixed_params: dict = field(default_factory=dict)
+    num_replicates: Optional[int] = None
 
 
 class CalibrationContext:
@@ -44,26 +74,35 @@ class CalibrationContext:
     
     def __init__(
         self,
-        db_path: str, 
-        obsData: Union[str, dict], 
-        obsData_columns: dict, 
-        model_config: dict, 
-        qoi_functions: dict,
-        distance_functions: dict, 
-        prior: Distribution, 
-        abc_options: dict, 
+        db_path: str,
+        obsData: Union[str, dict],
+        obsData_columns: dict,
+        model_config: Optional[dict] = None,
+        qoi_functions: Optional[dict] = None,
+        distance_functions: Optional[dict] = None,
+        prior: Optional[Distribution] = None,
+        abc_options: Optional[dict] = None,
         qoi_def:dict={},
         logger: Optional[logging.Logger] = None
     ):
-        """Initialize CalibrationContext with comprehensive validation and setup."""
+        """Initialize CalibrationContext with comprehensive validation and setup.
+
+        Model selection: pass ``abc_options["models"]`` as a list of dicts, each
+        REQUIRING ``name``, ``model_config`` and ``prior`` (optional: ``fixed_params``,
+        ``num_replicates``). When present, the top-level ``model_config`` / ``prior``
+        arguments are ignored. Otherwise the single-model form (top-level
+        ``model_config`` + ``prior``, optional ``abc_options["model_name"]`` /
+        ``abc_options["fixed_params"]``) is used.
+        """
         # Core configuration
         self.db_path = db_path
-        self.model_config = model_config
+        abc_options = dict(abc_options) if abc_options else {}
+        if qoi_functions is None or distance_functions is None:
+            raise ValueError("qoi_functions and distance_functions are required")
         # QOI_FUNCTIONS MUST BE STRINGS, BECAUSE THEY NEED TO BE SERIALIZABLE TO BE SAVED IN THE DATABASE AND USED IN THE DEFAULT AGGREGATION FUNCTION.
         self.qoi_functions = {key: _convert_qoi_function_to_string(value, key) if not isinstance(value, str) else value for key, value in qoi_functions.items()}
         self.qoi_def = qoi_def
         self.distance_functions = distance_functions
-        self.prior = prior
         self.abc_options = abc_options
         
         # Setup logger
@@ -121,26 +160,20 @@ class CalibrationContext:
         self.cluster_setup_func = abc_options.get("cluster_setup_func", None) # Function to setup Dask cluster
         self.num_workers = abc_options.get("num_workers", os.cpu_count())
         
-        # Model configuration
-        self.num_replicates = self.model_config.get('numReplicates', None)
-        # Read num_replicates from ini file if not provided in model_config
-        if self.num_replicates is None:
-            configFile = configparser.ConfigParser()
-            configFile.read_file(open(model_config['ini_path']))
-            self.num_replicates = int(configFile[model_config['struc_name']]['numReplicates'])
-        self.fixed_params = abc_options.get('fixed_params', {})
+        # Model configuration — normalize into a list of candidate ModelSpec objects
+        self.models = self._build_model_specs(abc_options, model_config, prior)
+        self.num_models = len(self.models)
+        self.model_selection = self.num_models > 1
+        # Worker math below uses the largest replicate count across candidate models
+        self.num_replicates = max(spec.num_replicates for spec in self.models)
         self.summary_function = abc_options.get("summary_function", None)
         self.aggregation_func = abc_options.get("custom_aggregation_func", self._default_aggregation_func)
         self.custom_run_single_replicate_func = abc_options.get("custom_run_single_replicate_func", None)
-        
-        
+
+
         # Parameter scaling
         self.log_scale = abc_options.get("log_scale", False)
-        
-        # Multiple models support
-        self.num_models = abc_options.get("num_models", 1)
-        self.model_selection = abc_options.get("model_selection", False)
-        
+
         # Parallelization setup
         self._setup_parallelization()
         
@@ -150,8 +183,118 @@ class CalibrationContext:
         self.logger.info(f"🔧 CalibrationContext initialized for ABC-SMC calibration")
         self.logger.info(f"📊 Database: {self.db_path}")
         self.logger.info(f"🎯 QoIs: {list(self.qoi_functions.keys())}")
-        self.logger.info(f"🔍 Parameters: {self.prior.get_parameter_names()}")
+        for spec in self.models:
+            self.logger.info(
+                f"🔍 Model '{spec.name}': struc={spec.model_config['struc_name']}, "
+                f"params={list(spec.prior.get_parameter_names())}, replicates={spec.num_replicates}"
+            )
+        if self.model_selection:
+            self.logger.info(f"🔀 ABC-SMC model selection enabled over {self.num_models} models")
         self.logger.info(f"⚙️ Sampler: {self.sampler_type} with {self.num_workers} workers")
+
+    # ------------------------------------------------------------------
+    # Back-compat single-model accessors (delegate to self.models[0])
+    # ------------------------------------------------------------------
+    @property
+    def model_config(self) -> dict:
+        return self.models[0].model_config
+
+    @model_config.setter
+    def model_config(self, value: dict):
+        self.models[0].model_config = value
+
+    @property
+    def prior(self) -> Distribution:
+        return self.models[0].prior
+
+    @prior.setter
+    def prior(self, value: Distribution):
+        self.models[0].prior = value
+
+    @property
+    def fixed_params(self) -> dict:
+        return self.models[0].fixed_params
+
+    @fixed_params.setter
+    def fixed_params(self, value: dict):
+        self.models[0].fixed_params = value
+
+    def _build_model_specs(self, abc_options: dict, model_config: Optional[dict],
+                           prior: Optional[Distribution]) -> List[ModelSpec]:
+        """Normalize the model configuration into a list of ModelSpec objects."""
+        for deprecated in ("num_models", "model_selection"):
+            if deprecated in abc_options:
+                self.logger.warning(
+                    f"abc_options['{deprecated}'] is deprecated and ignored; "
+                    f"use abc_options['models'] to enable model selection."
+                )
+
+        raw_models = abc_options.get("models", None)
+        specs: List[ModelSpec] = []
+        if raw_models:
+            if model_config is not None or prior is not None:
+                self.logger.warning(
+                    "abc_options['models'] is set; top-level model_config/prior are ignored."
+                )
+            for i, entry in enumerate(raw_models):
+                missing = [k for k in ("name", "model_config", "prior") if entry.get(k) is None]
+                if missing:
+                    raise ValueError(f"abc_options['models'][{i}] is missing required field(s): {missing}")
+                specs.append(ModelSpec(
+                    name=str(entry["name"]),
+                    model_config=dict(entry["model_config"]),
+                    prior=entry["prior"],
+                    fixed_params=dict(entry.get("fixed_params") or {}),
+                    num_replicates=entry.get("num_replicates", None),
+                ))
+        else:
+            if model_config is None or prior is None:
+                raise ValueError("Provide either abc_options['models'] or both model_config and prior.")
+            specs.append(ModelSpec(
+                name=str(abc_options.get("model_name", "Model_0")),
+                model_config=dict(model_config),
+                prior=prior,
+                fixed_params=dict(abc_options.get("fixed_params") or {}),
+                num_replicates=model_config.get("numReplicates", None),
+            ))
+
+        # Names must be unique and filesystem-safe (used for IO subfolders + DB keys)
+        names = [s.name for s in specs]
+        if len(set(names)) != len(names):
+            raise ValueError(f"Model names must be unique, got: {names}")
+        for n in names:
+            if not re.match(r"^[A-Za-z0-9_.-]+$", n):
+                raise ValueError(
+                    f"Model name '{n}' is invalid: use only letters, digits, '_', '.', '-'."
+                )
+
+        # Resolve replicate counts; isolate IO folders per model for multi-model runs
+        for spec in specs:
+            spec.num_replicates = self._resolve_num_replicates(spec)
+            if len(specs) > 1:
+                spec.model_config.setdefault("input_folder", f"{spec.name}/")
+                spec.model_config.setdefault("output_folder", f"{spec.name}/")
+        return specs
+
+    def _resolve_num_replicates(self, spec: ModelSpec) -> int:
+        """Resolve a spec's replicate count from the spec, model_config, or ini file."""
+        if spec.num_replicates is not None:
+            return int(spec.num_replicates)
+        n = spec.model_config.get("numReplicates", None)
+        if n is not None:
+            return int(n)
+        configFile = configparser.ConfigParser()
+        configFile.read_file(open(spec.model_config["ini_path"]))
+        return int(configFile[spec.model_config["struc_name"]]["numReplicates"])
+
+    def _instantiate_model(self, spec: ModelSpec) -> "PhysiCell_Model":
+        """Build a PhysiCell_Model for a spec, applying any per-model IO subfolders."""
+        model = PhysiCell_Model(spec.model_config["ini_path"], spec.model_config["struc_name"])
+        if spec.model_config.get("input_folder"):
+            model.input_folder += spec.model_config["input_folder"]
+        if spec.model_config.get("output_folder"):
+            model.output_folder += spec.model_config["output_folder"]
+        return model
 
     def _setup_parallelization(self):
         """Setup parallelization strategy based on configuration."""
@@ -168,18 +311,18 @@ class CalibrationContext:
     def _validate_configuration(self):
         """Validate the configuration parameters."""
         required_model_keys = ['ini_path', 'struc_name']
-        for key in required_model_keys:
-            if key not in self.model_config:
-                raise ValueError(f"Missing required model_config key: {key}")
-        
+        for spec in self.models:
+            for key in required_model_keys:
+                if key not in spec.model_config:
+                    raise ValueError(f"Model '{spec.name}': missing required model_config key: {key}")
+            if not spec.prior:
+                raise ValueError(f"Model '{spec.name}': prior cannot be empty")
+
         if not self.qoi_functions:
             raise ValueError("qoi_functions cannot be empty")
-        
+
         if not self.distance_functions:
             raise ValueError("distance_functions cannot be empty")
-        
-        if not self.prior:
-            raise ValueError("prior cannot be empty")
 
         # Validate QoI consistency
         for qoi in self.qoi_functions.keys():
@@ -258,27 +401,28 @@ class CalibrationContext:
         else:
             raise ValueError(f"Epsilon strategy '{self.epsilon_strategy}' not supported")
 
-    def create_model_wrapper(self, fixed_params_dict, workers_inner=None):
-        """Create wrapper function for PhysiCell model evaluation."""
+    def create_model_wrapper(self, model_spec: ModelSpec, workers_inner=None):
+        """Create a pyABC model function for one candidate model."""
         def model_wrapper(pars):
-            return self._run_physicell_model(pars, fixed_params_dict, workers_inner)
+            return self._run_physicell_model(pars, model_spec, workers_inner)
+        model_wrapper.__name__ = f"run_physicell_{model_spec.name}"
         return model_wrapper
 
-    def _run_physicell_model(self, pars, fixed_params, workers_inner=None):
-        """Run PhysiCell model with given parameters."""
+    def _run_physicell_model(self, pars, model_spec: ModelSpec, workers_inner=None):
+        """Run a candidate PhysiCell model with given parameters."""
         try:
             # Convert parameters from log scale if needed
             if self.log_scale and hasattr(self, '_convert_params_to_linear_scale'):
                 pars = self._convert_params_to_linear_scale(pars)
-            
+
             # Choose parallelization strategy based on sampler
             if self.sampler_type == 'multicore' and workers_inner is not None:
-                return self._run_replicates_parallel(workers_inner, pars, fixed_params)
+                return self._run_replicates_parallel(workers_inner, pars, model_spec)
             else:
-                return self._run_physicell_model_sequential(pars, fixed_params)
+                return self._run_physicell_model_sequential(pars, model_spec)
         except Exception as e:
-            self.logger.error(f"Error in model evaluation: {e}")
-            raise ValueError(f"Error in model evaluation: {e}")
+            self.logger.error(f"Error in model evaluation ({model_spec.name}): {e}")
+            raise ValueError(f"Error in model evaluation ({model_spec.name}): {e}")
         
     def _default_aggregation_func(self, replicate_results):
         """Define function to aggregate the replicates"""
@@ -289,18 +433,14 @@ class CalibrationContext:
         except Exception as e:
             raise ValueError(f"Error in _default_aggregation_func for sampleID: {replicate_results.values()[0]['sampleID'].unique()}")
 
-    def _run_physicell_model_sequential(self, pars, fixed_params, sample_id=None, replicate_id=None):
-        """Run PhysiCell model sequentially."""
-        # Create the PhysiCell model instance for each worker
-        physicell_model = PhysiCell_Model(self.model_config['ini_path'], self.model_config['struc_name'])
-        physicell_model.numReplicates = self.num_replicates
-        
-        # Configure input/output folders
-        if "input_folder" in self.model_config:
-            physicell_model.input_folder += self.model_config['input_folder']
-        if "output_folder" in self.model_config:
-            physicell_model.output_folder += self.model_config['output_folder']
-        
+    def _run_physicell_model_sequential(self, pars, model_spec: ModelSpec, sample_id=None, replicate_id=None):
+        """Run one candidate PhysiCell model sequentially."""
+        fixed_params = model_spec.fixed_params
+        num_replicates = model_spec.num_replicates
+
+        # Create the PhysiCell model instance for each worker (applies per-model IO subfolders)
+        physicell_model = self._instantiate_model(model_spec)
+        physicell_model.numReplicates = num_replicates
         physicell_model.timeout = 600
         physicell_model.output_summary_Path = None
 
@@ -328,13 +468,13 @@ class CalibrationContext:
             raise ValueError(f"Some parameters are None: {dic_pars_xml}, {dic_pars_rules}")
 
         # Run replicates
-        replicates = range(self.num_replicates) if replicate_id is None else [replicate_id]
-        
+        replicates = range(num_replicates) if replicate_id is None else [replicate_id]
+
         dic_all_replicates = {}
         for replicate_id in replicates:
             try:
                 _, _, result_data = run_replicate_serializable(
-                    PhysiCellModel_conf=self.model_config,
+                    PhysiCellModel_conf=model_spec.model_config,
                     sample_id=sample_id,
                     replicate_id=replicate_id,
                     ParametersXML=dic_pars_xml,
@@ -348,7 +488,7 @@ class CalibrationContext:
                 dic_all_replicates[replicate_id] = result_data
             except Exception as e:
                 raise RuntimeError(f"Error in RunModel (SampleID: {sample_id}): {e}")
-            
+
             # Check if RunModel returned valid data
             if not hasattr(result_data, 'columns') or len(result_data) == 0:
                 raise RuntimeError(f"RunModel returned empty or invalid DataFrame for SampleID: {sample_id}, ReplicateID: {replicate_id}")
@@ -358,15 +498,15 @@ class CalibrationContext:
         else:
             return dic_all_replicates
 
-    def _run_replicates_parallel(self, workers_inner, params, fixed_params):
+    def _run_replicates_parallel(self, workers_inner, params, model_spec: ModelSpec):
         """Run replicates in parallel using ThreadPoolExecutor."""
-        
+
         with ThreadPoolExecutor(max_workers=workers_inner) as executor:
             futures = []
-            for replicate_id in range(self.num_replicates):
+            for replicate_id in range(model_spec.num_replicates):
                 future = executor.submit(
                     self._run_physicell_model_sequential,
-                    params, fixed_params, self._get_worker_id(), replicate_id
+                    params, model_spec, self._get_worker_id(), replicate_id
                 )
                 futures.append(future)
             
@@ -432,8 +572,6 @@ class CalibrationContext:
         else:
             self.logger.info(f"Starting calibration: max populations: {self.max_populations}, max simulations: {self.max_simulations}")
             abc_smc.run(max_nr_populations=self.max_populations, max_total_nr_simulations=self.max_simulations)
-            # Add metadata to database
-            insert_metadata_db(self.db_path, self)
             # Add extra info of adaptive distance to database
             if self.adaptive_distance:
                 insert_adaptive_weights_db(self.db_path, dict_distances=self.distance_functions, dict_adaptive_weights=load_dict_from_json(self.adaptive_distance_file))
@@ -494,23 +632,21 @@ def run_abc_calibration( calib_context: CalibrationContext) -> History:
         logger.info("🎯 Setting up epsilon function...")
         eps_function = calib_context.setup_epsilon_function()
         
-        # Setup model wrappers
+        # Setup model wrappers — one pyABC model function + prior per candidate model
         logger.info("🧬 Setting up model wrappers...")
-        
-        # Handle multiple models if specified
-        if calib_context.model_selection and calib_context.num_models > 1:
-            # This would require additional logic for multiple models
-            # For now, use single model approach
-            logger.info("⚠️ Multiple model selection not fully implemented, using single model")
-        
-        # Create model wrapper
-        model_wrapper = calib_context.create_model_wrapper(
-            calib_context.fixed_params, 
-            calib_context.workers_inner
-        )
-        
-        models_list = [model_wrapper]
-        priors_list = [calib_context.prior]
+        models_list = []
+        priors_list = []
+        for spec in calib_context.models:
+            wrapper = calib_context.create_model_wrapper(spec, calib_context.workers_inner)
+            # Register by name in module globals so pickle-by-reference samplers (Dask) resolve it
+            globals()[wrapper.__name__] = wrapper
+            models_list.append(wrapper)
+            priors_list.append(spec.prior)
+        if calib_context.model_selection:
+            logger.info(
+                f"🔀 ABC-SMC model selection over {len(models_list)} models: "
+                f"{[s.name for s in calib_context.models]}"
+            )
         
         # Setup ABC-SMC object
         logger.info("🔧 Setting up ABC-SMC object...")
@@ -533,7 +669,7 @@ def run_abc_calibration( calib_context: CalibrationContext) -> History:
         calib_context.run_calibration(abc_smc, resume_db, current_populations, current_simulations)
         
         # Check convergence and run additional populations if needed
-        if calib_context.convergence_check_func is not None and calib_context.mode == 'cluster':
+        if calib_context.convergence_check_func is not None and getattr(calib_context, 'mode', 'cluster') == 'cluster':
             logger.info("🔍 Checking convergence...")
             while True:
                 if calib_context.convergence_check_func(abc_smc.history):
@@ -558,9 +694,27 @@ def run_abc_calibration( calib_context: CalibrationContext) -> History:
                 if calib_context.adaptive_distance:
                     insert_adaptive_weights_db(calib_context.db_path, dict_distances=calib_context.distance_functions, dict_adaptive_weights=load_dict_from_json(calib_context.adaptive_distance_file))
         
-        # Remove temporary file and folders
-        physicell_model = PhysiCell_Model(calib_context.model_config['ini_path'], calib_context.model_config['struc_name'])
-        physicell_model.remove_io_folders()
+        # Persist run + model metadata. Idempotent (INSERT OR REPLACE) so it also
+        # refreshes after a resumed calibration, not only on the first run.
+        try:
+            insert_metadata_db(calib_context.db_path, calib_context)
+            insert_models_db(calib_context.db_path, calib_context)
+            if calib_context.model_selection:
+                insert_model_probabilities_db(calib_context.db_path, abc_smc.history)
+                logger.info(f"🔀 Final model probabilities:\n{abc_smc.history.get_model_probabilities()}")
+            if (calib_context.adaptive_distance and calib_context.adaptive_distance_file
+                    and os.path.exists(calib_context.adaptive_distance_file)):
+                insert_adaptive_weights_db(
+                    calib_context.db_path,
+                    dict_distances=calib_context.distance_functions,
+                    dict_adaptive_weights=load_dict_from_json(calib_context.adaptive_distance_file),
+                )
+        except Exception as e:
+            logger.warning(f"Could not persist calibration metadata: {e}")
+
+        # Remove temporary file and folders (one PhysiCell model per candidate)
+        for spec in calib_context.models:
+            calib_context._instantiate_model(spec).remove_io_folders()
         
         # Final results
         final_history = abc_smc.history
