@@ -1325,7 +1325,7 @@ def single_objective_bayesian_optimization(calib_context, train_x, train_obj, tr
         
         # Acquisition function: qLogExpectedImprovement
         sampler = SobolQMCNormalSampler(sample_shape=torch.Size([samples_per_batch]))
-        acq_func = qLogExpectedImprovement(model=model, best_f=train_yvar.max().item(), sampler=sampler)
+        acq_func = qLogExpectedImprovement(model=model, best_f=train_y.max().item(), sampler=sampler)
         num_params = len(search_space)
         bounds = torch.stack([torch.zeros(num_params), torch.ones(num_params)]).to(torch.float64)
         candidates, acq_values = optimize_acqf(
