@@ -693,7 +693,21 @@ def run_abc_calibration( calib_context: CalibrationContext) -> History:
         # Run calibration
         logger.info("🎲 Starting calibration run...")
         calib_context.run_calibration(abc_smc, resume_db, current_populations, current_simulations)
-        
+
+        # Persist run + model metadata now, right after the first run() call
+        # returns, rather than waiting until after the convergence-extension
+        # loop below. That loop can run for a long time (or indefinitely on a
+        # multi-day cluster job) and is the most likely place for a crash or
+        # timeout; without this, such a failure leaves pyABC's own History file
+        # fully populated but the Metadata/Models tables completely empty.
+        # Idempotent (INSERT OR REPLACE) so it also refreshes after a resumed
+        # calibration, not only on a fresh run.
+        try:
+            insert_metadata_db(calib_context.db_path, calib_context)
+            insert_models_db(calib_context.db_path, calib_context)
+        except Exception as e:
+            logger.warning(f"Could not persist calibration metadata: {e}")
+
         # Check convergence and run additional populations if needed
         if calib_context.convergence_check_func is not None and getattr(calib_context, 'mode', 'cluster') == 'cluster':
             logger.info("🔍 Checking convergence...")
@@ -720,11 +734,10 @@ def run_abc_calibration( calib_context: CalibrationContext) -> History:
                 if calib_context.adaptive_distance:
                     insert_adaptive_weights_db(calib_context.db_path, dict_distances=calib_context.distance_functions, dict_adaptive_weights=load_dict_from_json(calib_context.adaptive_distance_file))
         
-        # Persist run + model metadata. Idempotent (INSERT OR REPLACE) so it also
-        # refreshes after a resumed calibration, not only on the first run.
+        # Persist results that depend on the final history state (model
+        # probabilities, adaptive weights) -- the run + model metadata itself
+        # was already persisted right after the first run() call, above.
         try:
-            insert_metadata_db(calib_context.db_path, calib_context)
-            insert_models_db(calib_context.db_path, calib_context)
             if calib_context.model_selection:
                 insert_model_probabilities_db(calib_context.db_path, abc_smc.history)
                 logger.info(f"🔀 Final model probabilities:\n{abc_smc.history.get_model_probabilities()}")
