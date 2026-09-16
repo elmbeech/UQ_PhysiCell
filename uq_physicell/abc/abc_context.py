@@ -480,16 +480,28 @@ class CalibrationContext:
         if None in dic_pars_xml.values() or None in dic_pars_rules.values():
             raise ValueError(f"Some parameters are None: {dic_pars_xml}, {dic_pars_rules}")
 
-        # Run replicates
+        # Run replicates. NOTE: keep the loop variable distinct from the
+        # `replicate_id` parameter -- reusing it here would shadow the
+        # parameter, so the `replicate_id is None` check below would never be
+        # true again after the loop runs, silently skipping aggregation for
+        # every caller that passes replicate_id=None (i.e. any non-multicore
+        # sampler, such as "dask").
         replicates = range(num_replicates) if replicate_id is None else [replicate_id]
 
+        # Draw one distinct random seed per replicate up front (without
+        # replacement) so replicates of the same particle launched in the same
+        # clock tick -- e.g. parallel threads in _run_replicates_parallel --
+        # don't collide on PhysiCell's default system-clock seed. Mirrors the
+        # equivalent fix in the model-analysis runner (ma_context.py).
+        replicate_seeds = np.random.default_rng().choice(2**32, size=len(replicates), replace=False).tolist()
+
         dic_all_replicates = {}
-        for replicate_id in replicates:
+        for seed, rep_id in zip(replicate_seeds, replicates):
             try:
                 _, _, result_data = run_replicate_serializable(
                     PhysiCellModel_conf=model_spec.model_config,
                     sample_id=sample_id,
-                    replicate_id=replicate_id,
+                    replicate_id=rep_id,
                     ParametersXML=dic_pars_xml,
                     ParametersRules=dic_pars_rules,
                     qoi_functions=self.qoi_functions,
@@ -497,14 +509,15 @@ class CalibrationContext:
                     return_binary_output=False,
                     #drop_columns,
                     custom_summary_function=self.summary_function,
+                    random_seed=int(seed),
                 )
-                dic_all_replicates[replicate_id] = result_data
+                dic_all_replicates[rep_id] = result_data
             except Exception as e:
                 raise RuntimeError(f"Error in RunModel (SampleID: {sample_id}): {e}")
 
             # Check if RunModel returned valid data
             if not hasattr(result_data, 'columns') or len(result_data) == 0:
-                raise RuntimeError(f"RunModel returned empty or invalid DataFrame for SampleID: {sample_id}, ReplicateID: {replicate_id}")
+                raise RuntimeError(f"RunModel returned empty or invalid DataFrame for SampleID: {sample_id}, ReplicateID: {rep_id}")
         # All replicates done, run aggregation function
         if replicate_id is None:
             return self.aggregation_func(dic_all_replicates)

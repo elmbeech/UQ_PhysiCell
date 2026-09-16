@@ -8,7 +8,9 @@ import os
 import logging
 import tempfile
 import numpy as np
+import pandas as pd
 import pytest
+from unittest.mock import patch, MagicMock
 
 # Add the path to import uq_physicell
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -283,6 +285,79 @@ def test_model_selection_db_tables():
         cols = {c[1] for c in conn.execute("PRAGMA table_info(Models)")}
         assert {'Ini_Hash', 'XML_Hash', 'Rules_Hash', 'Structure_Config_Hash', 'Effective_Run_Hash'} <= cols
         conn.close()
+    finally:
+        for p in (ini_path, db_path):
+            if os.path.exists(p):
+                os.unlink(p)
+
+
+def test_sequential_replicate_aggregation_and_seeds():
+    """Regression test for two bugs in _run_physicell_model_sequential:
+
+    1. The replicate loop reused the `replicate_id` parameter as its loop
+       variable, shadowing it -- so `if replicate_id is None:` was never true
+       after the loop ran, and aggregation_func was silently skipped whenever
+       this is called with replicate_id=None (i.e. the non-multicore / "dask"
+       sampler path).
+    2. Replicates were run without a distinct random_seed per replicate, so
+       parallel replicates of the same particle could collide on PhysiCell's
+       default system-clock seed.
+    """
+    from uq_physicell.abc import CalibrationContext
+    from uq_physicell.abc.abc_context import ModelSpec
+    from pyabc import Distribution, RV
+
+    ini_content = "[strucA]\nnumReplicates = 3\n"
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ini', delete=False) as ini_file:
+        ini_file.write(ini_content)
+        ini_path = ini_file.name
+    db_path = tempfile.NamedTemporaryFile(suffix='.db', delete=False).name
+    prior = Distribution(param1=RV('uniform', 0, 1.0))
+
+    try:
+        calib_context = CalibrationContext(
+            db_path=db_path,
+            obsData={'QoI1': np.array([1.0, 1.1])},
+            obsData_columns={'QoI1': 'QoI1_data'},
+            qoi_functions={'QoI1': 'lambda df: df["QoI1"].values'},
+            distance_functions={'QoI1': {'function': 'euclidean', 'weight': 1.0}},
+            model_config={'ini_path': ini_path, 'struc_name': 'strucA'},
+            prior=prior,
+            abc_options={},
+        )
+        model_spec = ModelSpec(
+            name='strucA',
+            model_config={'ini_path': ini_path, 'struc_name': 'strucA'},
+            prior=prior,
+            num_replicates=3,
+        )
+
+        fake_model = MagicMock()
+        fake_model.XML_parameters_variable = {}
+        fake_model.parameters_rules_variable = {}
+
+        aggregation_calls = []
+        def fake_aggregation_func(dic_all_replicates):
+            aggregation_calls.append(dic_all_replicates)
+            return "AGGREGATED"
+
+        seen_seeds = []
+        def fake_run_replicate_serializable(**kwargs):
+            seen_seeds.append(kwargs["random_seed"])
+            return (None, None, pd.DataFrame({"sampleID": [1], "time": [0]}))
+
+        with patch.object(calib_context, "_instantiate_model", return_value=fake_model), \
+             patch.object(calib_context, "aggregation_func", side_effect=fake_aggregation_func), \
+             patch("uq_physicell.abc.abc_context.run_replicate_serializable", side_effect=fake_run_replicate_serializable):
+            result = calib_context._run_physicell_model_sequential(
+                pars={}, model_spec=model_spec, sample_id=1, replicate_id=None
+            )
+
+        assert aggregation_calls, "aggregation_func was never called -- replicate_id shadowing regression"
+        assert result == "AGGREGATED"
+
+        assert len(seen_seeds) == 3
+        assert len(set(seen_seeds)) == 3, "replicates must not share a random seed"
     finally:
         for p in (ini_path, db_path):
             if os.path.exists(p):
