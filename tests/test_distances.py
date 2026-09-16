@@ -37,6 +37,13 @@ class TestDistanceFunctions(unittest.TestCase):
             "value": np.array([6.0, 7.0, 8.0, 9.0, 10.0])
         }
 
+    def test_none_model_data_returns_inf(self):
+        """A failed simulation (CalibrationContext._run_physicell_model returns
+        None) must reject the particle via np.inf, not crash on None["time"]."""
+        self.assertEqual(SumSquaredDifferences(None, self.dic_obs_data), np.inf)
+        self.assertEqual(Manhattan(None, self.dic_obs_data), np.inf)
+        self.assertEqual(Chebyshev(None, self.dic_obs_data), np.inf)
+
     def test_sum_squared_differences_perfect_match(self):
         """Test SumSquaredDifferences with identical time points."""
         result = SumSquaredDifferences(self.dic_model_data, self.dic_obs_data)

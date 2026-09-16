@@ -155,6 +155,11 @@ obs_data_columns = {
 }
 
 def euclidean_distance_epi(data1, data2):
+    # data1 (the simulated summary) is None when that particle's PhysiCell run
+    # failed; returning np.inf rejects the particle instead of crashing on
+    # None['epi_'] and killing the whole calibration run.
+    if data1 is None:
+        return np.inf
     return np.sum((np.array(data1['epi_']) - np.array(data2['epi_'])) ** 2)
 
 distance_functions = {
@@ -185,6 +190,8 @@ history = run_abc_calibration(calib_context=calib_context)
 ```
 
 `run_abc_calibration` returns the [pyabc](https://pyabc.readthedocs.io/en/latest/what.html) `History` object, which gives direct access to `pyabc.visualization` (posterior KDE matrices, epsilon schedules, etc.) in addition to the results stored in `results.db`.
+
+**Handling a failed simulation.** A PhysiCell crash (segfault, malformed output, a transient filesystem hiccup, ...) is a property of one particle, not of the whole calibration. When that happens, `CalibrationContext` catches it and passes `None` as the simulated data instead of letting the exception kill the pyABC worker process — every custom distance function must therefore check for `None` (as above) and return `np.inf` to reject that particle, the same convention used for a malformed or short simulation output. The built-in distance functions in `uq_physicell.utils.distances` (`SumSquaredDifferences`, `Manhattan`, `Chebyshev`) already do this.
 
 **Full worked example:** {doc}`examples/virus-mac-new/ex8_ABC_Calib`
 
