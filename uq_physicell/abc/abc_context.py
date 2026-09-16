@@ -409,7 +409,20 @@ class CalibrationContext:
         return model_wrapper
 
     def _run_physicell_model(self, pars, model_spec: ModelSpec, workers_inner=None):
-        """Run a candidate PhysiCell model with given parameters."""
+        """Run a candidate PhysiCell model with given parameters.
+
+        This is the function pyABC calls directly for every proposed particle. A
+        PhysiCell crash (segfault, malformed output, a transient filesystem
+        hiccup, ...) is a property of one parameter draw, not of the whole
+        calibration — letting the exception propagate kills the pyABC worker
+        process outright ("At least one worker is dead"), aborting the entire
+        (possibly multi-day) run over a single bad sample. Instead, log it and
+        return None: pyABC treats that as this particle's raw data, so the
+        distance function decides its fate. Distance functions must therefore
+        handle `sim is None` (and shape mismatches) by returning np.inf, the
+        same convention used for a malformed/short simulation output — see
+        ex11_ABC_ModelSelection.ipynb's `_relative_rmse`.
+        """
         try:
             # Convert parameters from log scale if needed
             if self.log_scale and hasattr(self, '_convert_params_to_linear_scale'):
@@ -421,8 +434,8 @@ class CalibrationContext:
             else:
                 return self._run_physicell_model_sequential(pars, model_spec)
         except Exception as e:
-            self.logger.error(f"Error in model evaluation ({model_spec.name}): {e}")
-            raise ValueError(f"Error in model evaluation ({model_spec.name}): {e}")
+            self.logger.error(f"Error in model evaluation ({model_spec.name}): {e} -- rejecting this particle")
+            return None
         
     def _default_aggregation_func(self, replicate_results):
         """Define function to aggregate the replicates"""
