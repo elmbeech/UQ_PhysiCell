@@ -777,7 +777,59 @@ def check_db_consistency(db_file):
     return True
 
 
-def check_simulations_db(PhysiCellModel: PhysiCell_Model, sampler: str, param_dict: dict, 
+def _apply_schema_migrations(cursor) -> list:
+    """Apply additive, idempotent schema migrations to an existing model-analysis database.
+
+    Assumes the base tables already exist (i.e. this is a pre-existing database, not one
+    just created by create_structure, which already writes the current schema). Safe to
+    call repeatedly and on already-current databases. Returns the list of migrations that
+    were applied.
+
+    Migrations:
+        - Output.Seed : column added if missing (databases created before the
+          per-simulation seed-tracking feature otherwise fail every insert_output()
+          call on resume with "table Output has no column named Seed").
+    """
+    applied = []
+    out_cols = [row[1] for row in cursor.execute("PRAGMA table_info(Output)").fetchall()]
+    if out_cols and "Seed" not in out_cols:
+        cursor.execute("ALTER TABLE Output ADD COLUMN Seed INTEGER")
+        applied.append("Output.Seed added")
+    return applied
+
+
+def migrate_ma_database(db_path: str) -> list:
+    """Upgrade an existing model-analysis database file to the current schema, in place.
+
+    Runs the additive, idempotent migrations in :func:`_apply_schema_migrations` (see there
+    for the list). Safe to call on an already-current database (returns an empty list).
+    check_simulations_db calls this automatically when resuming an existing database, so
+    most callers never need to call it directly.
+
+    Args:
+        db_path (str): Path to an existing model-analysis ``.db`` file.
+
+    Returns:
+        list: Human-readable names of the migrations that were applied (empty if already current).
+
+    Raises:
+        RuntimeError: If the file does not exist or the migration fails (e.g. read-only file).
+    """
+    if not os.path.exists(db_path):
+        raise RuntimeError(f"Database file not found: {db_path}")
+    conn = sqlite3.connect(db_path, timeout=30.0)
+    try:
+        cursor = conn.cursor()
+        applied = _apply_schema_migrations(cursor)
+        conn.commit()
+        return applied
+    except sqlite3.Error as e:
+        raise RuntimeError(f"Error migrating model-analysis database '{db_path}': {e}")
+    finally:
+        conn.close()
+
+
+def check_simulations_db(PhysiCellModel: PhysiCell_Model, sampler: str, param_dict: dict,
                         dic_samples: dict, qois_dic: dict, db_file: str) -> tuple:
     """Check database existence and identify missing simulations.
     
@@ -808,6 +860,15 @@ def check_simulations_db(PhysiCellModel: PhysiCell_Model, sampler: str, param_di
     parameters_missing, samples_missing, replicates_missing = [], [], []
     if not os.path.exists(db_file):
         return False, parameters_missing, samples_missing, replicates_missing
+
+    # Resuming an existing database skips create_structure (which only runs for a
+    # brand-new file), so a database created before a schema change never picks up
+    # new columns on its own -- e.g. one without Output.Seed would otherwise fail
+    # every insert_output() call in this resumed run. Migrate it in place first.
+    try:
+        migrate_ma_database(db_file)
+    except RuntimeError as e:
+        raise RuntimeError(f"Error migrating existing database '{db_file}': {e}")
 
     try:
         # Load the database structure

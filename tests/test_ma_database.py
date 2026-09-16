@@ -327,5 +327,88 @@ class TestDatabaseCreation:
                 os.remove(db_file)
 
 
+class TestOutputSeedMigration:
+    """Regression tests: resuming a database created before the Output.Seed
+    column (via check_simulations_db) must not fail with
+    sqlite3.OperationalError: table Output has no column named Seed."""
+
+    def _make_legacy_db(self, db_file):
+        """Build a database with the pre-Seed-column Output table, matching what
+        create_structure produced before the Seed column was added."""
+        import sqlite3
+        conn = sqlite3.connect(db_file)
+        cursor = conn.cursor()
+        cursor.execute("CREATE TABLE Metadata (Sampler TEXT, Ini_File_Path TEXT, StructureName TEXT)")
+        cursor.execute("CREATE TABLE ParameterSpace (ParamName TEXT, Lower_Bound DOUBLE, Upper_Bound DOUBLE, ReferenceValue DOUBLE, Perturbation TEXT)")
+        cursor.execute("CREATE TABLE QoIs (QOI_Name TEXT, QOI_Function TEXT)")
+        cursor.execute("CREATE TABLE Samples (SampleID INTEGER, ParamName TEXT, ParamValue DOUBLE)")
+        cursor.execute("CREATE TABLE Output (SampleID INTEGER, ReplicateID INTEGER, Data BLOB)")
+        conn.commit()
+        conn.close()
+
+    def test_migrate_ma_database_adds_missing_seed_column(self):
+        from uq_physicell.database.ma_db import migrate_ma_database
+        import sqlite3
+        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+            db_file = tmp.name
+        try:
+            self._make_legacy_db(db_file)
+            cols_before = {row[1] for row in sqlite3.connect(db_file).execute("PRAGMA table_info(Output)")}
+            assert "Seed" not in cols_before
+
+            applied = migrate_ma_database(db_file)
+            assert applied == ["Output.Seed added"]
+            cols_after = {row[1] for row in sqlite3.connect(db_file).execute("PRAGMA table_info(Output)")}
+            assert "Seed" in cols_after
+
+            # Idempotent: running again on an already-current database is a no-op.
+            assert migrate_ma_database(db_file) == []
+        finally:
+            if os.path.exists(db_file):
+                os.remove(db_file)
+
+    def test_insert_output_with_seed_succeeds_after_migration(self):
+        """The actual failure mode this fixes: insert_output(..., seed=...) on a
+        resumed legacy database used to raise sqlite3.OperationalError."""
+        from uq_physicell.database.ma_db import migrate_ma_database
+        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+            db_file = tmp.name
+        try:
+            self._make_legacy_db(db_file)
+            migrate_ma_database(db_file)
+            serialized = pickle.dumps(pd.DataFrame({'col': [1, 2, 3]}))
+            insert_output(db_file, sample_id=0, replicate_id=0, result_data=serialized, seed=1234567)
+            df = load_output(db_file, load_data=False, load_seed=True)
+            assert df.loc[0, "Seed"] == 1234567
+        finally:
+            if os.path.exists(db_file):
+                os.remove(db_file)
+
+    def test_check_simulations_db_migrates_legacy_database(self, monkeypatch):
+        """check_simulations_db (the real resume path) must migrate the database
+        before touching it, not just the standalone migrate_ma_database helper."""
+        from uq_physicell.database import ma_db
+        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+            db_file = tmp.name
+        try:
+            self._make_legacy_db(db_file)
+
+            # Stub out load_structure so this test doesn't need a real PhysiCell
+            # model / matching Metadata row -- only the migration step is under test.
+            def fake_load_structure(db_file, load_result=True):
+                raise RuntimeError("stop after migration")
+            monkeypatch.setattr(ma_db, "load_structure", fake_load_structure)
+
+            with pytest.raises(ValueError, match="stop after migration"):
+                ma_db.check_simulations_db(None, "Sobol", {}, {}, {}, db_file)
+
+            import sqlite3
+            cols = {row[1] for row in sqlite3.connect(db_file).execute("PRAGMA table_info(Output)")}
+            assert "Seed" in cols
+        finally:
+            if os.path.exists(db_file):
+                os.remove(db_file)
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
