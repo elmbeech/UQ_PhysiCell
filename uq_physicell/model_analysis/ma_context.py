@@ -46,7 +46,9 @@ class ModelAnalysisContext:
         params_info (dict): Dictionary containing parameter definitions with keys
             for each parameter name and values containing 'ref_value', 'lower_bound',
             'upper_bound', and 'perturbation' information.
-        qois_info (dict): Dictionary containing Quantities of Interest definitions.
+        qois_info (dict or None): Dictionary containing Quantities of Interest definitions.
+            None means no QoI processing -- the raw mcds list is stored per simulation
+            instead of computed QoIs (see run_simulations' summary_function).
         qoi_def (dict): first-class object, that can be used in qoi_functions
             lambda string, mapped to their name.
         parallel_method (str, optional): Parallelization method. Options are:
@@ -63,11 +65,11 @@ class ModelAnalysisContext:
     """
     def __init__(
             self, 
-            db_path:str, 
-            model_config:dict, 
-            sampler:str, 
-            params_info:dict, 
-            qois_info:dict, 
+            db_path:str,
+            model_config:dict,
+            sampler:str,
+            params_info:dict,
+            qois_info:dict=None,
             qoi_def:dict={},
             parallel_method:str='inter-process', 
             num_workers:int=1, 
@@ -80,26 +82,34 @@ class ModelAnalysisContext:
         if isinstance(model_config, (tuple, list)):
             model_config = {'ini_path': model_config[0], 'struc_name': model_config[1]}
 
-        # Check free variables before converting to strings — Python's eval() is lazy
-        # and only detects missing names at call time, not at lambda-creation time.
-        # co_freevars reveals closure references that will fail in worker processes.
-        for qoi_name, func in qois_info.items():
-            if callable(func) and hasattr(func, '__code__'):
-                unresolved = set(func.__code__.co_freevars) - set(qoi_def.keys())
-                if unresolved:
-                    raise ValueError(
-                        f"QoI '{qoi_name}': lambda closes over {sorted(unresolved)} which "
-                        f"cannot be serialized for multiprocessing. Pass via "
-                        f"qoi_def={{name: object}} in ModelAnalysisContext."
-                    )
+        # qois_info=None means "no QoI processing at all" -- run_simulations'
+        # summary_function (and insert_qois) already treat that as a request to
+        # store the raw mcds list instead of computed QoIs, so preserve it as-is
+        # rather than coercing to {} (which would instead mean "compute zero
+        # QoIs per snapshot", producing empty per-snapshot rows downstream).
+        if qois_info is None:
+            self.qois_dict = None
+        else:
+            # Check free variables before converting to strings — Python's eval() is lazy
+            # and only detects missing names at call time, not at lambda-creation time.
+            # co_freevars reveals closure references that will fail in worker processes.
+            for qoi_name, func in qois_info.items():
+                if callable(func) and hasattr(func, '__code__'):
+                    unresolved = set(func.__code__.co_freevars) - set(qoi_def.keys())
+                    if unresolved:
+                        raise ValueError(
+                            f"QoI '{qoi_name}': lambda closes over {sorted(unresolved)} which "
+                            f"cannot be serialized for multiprocessing. Pass via "
+                            f"qoi_def={{name: object}} in ModelAnalysisContext."
+                        )
 
-        # QoI functions are stored as source strings so they can be pickled across processes.
-        # A value of None is a valid placeholder (e.g. when a custom summary_function computes
-        # the QoIs directly) and is passed through as-is.
-        self.qois_dict = {
-            key: value if value is None or isinstance(value, str) else _convert_qoi_function_to_string(value, key)
-            for key, value in qois_info.items()
-        }
+            # QoI functions are stored as source strings so they can be pickled across processes.
+            # A value of None is a valid placeholder (e.g. when a custom summary_function computes
+            # the QoIs directly) and is passed through as-is.
+            self.qois_dict = {
+                key: value if value is None or isinstance(value, str) else _convert_qoi_function_to_string(value, key)
+                for key, value in qois_info.items()
+            }
         self.qoi_def = qoi_def
 
         # Secondary check: verify string-form QoIs can be eval'd in the restricted namespace

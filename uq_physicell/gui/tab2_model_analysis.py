@@ -141,7 +141,9 @@ def on_run_simulations_clicked(main_window):
         SA_sampler = main_window.sampler_combo.currentText() if sampling_type else None
         SA_samples = main_window.local_SA_parameters.get("samples") if sampling_type == "Local" else main_window.global_SA_parameters.get("samples")
         db_file_name = main_window.db_file_name_input.text().strip()
-        qoi_str = ', '.join(main_window.qoi_funcs.keys()) if main_window.qoi_funcs else None
+        # ModelAnalysisContext expects the actual {name: func} dict (or None to mean
+        # "no QoIs, store the raw mcds list") -- not a display string of the names.
+        qois_info = main_window.qoi_funcs if main_window.qoi_funcs else None
         model_config = {"ini_path": main_window.ini_file_path, "struc_name": main_window.struc_name_input.text().strip()}
         # --- Validate inputs (all in main thread) ---
         if not sampling_type:
@@ -165,7 +167,7 @@ def on_run_simulations_clicked(main_window):
                 return
             else:
                 main_window.update_output_tab2(main_window, "QoI(s) not defined: All data will be stored as mcds list.")
-                qoi_str = None
+                qois_info = None
         # --- Start simulation in background thread ---
         main_window.simulation_cancelled = False
         main_window.should_load_db = False  # Initialize flag for database loading
@@ -218,8 +220,8 @@ def on_run_simulations_clicked(main_window):
                 if sampling_type == "Local":
                     # Create the context and store it in the main window for cancellation access
                     main_window.simulation_context = ModelAnalysisContext(
-                        db_file_name, model_config, SA_sampler, 
-                        main_window.local_SA_parameters, qoi_str, 
+                        db_file_name, model_config, SA_sampler,
+                        main_window.local_SA_parameters, qois_info,
                         num_workers=int(num_workers), logger=main_window.logger_tab2
                     )
                     main_window.simulation_context.dic_samples = SA_samples
@@ -229,8 +231,8 @@ def on_run_simulations_clicked(main_window):
                 elif sampling_type == "Global":
                     # Create the context and store it in the main window for cancellation access
                     main_window.simulation_context = ModelAnalysisContext(
-                        db_file_name, model_config, SA_sampler, 
-                        main_window.global_SA_parameters, qoi_str, 
+                        db_file_name, model_config, SA_sampler,
+                        main_window.global_SA_parameters, qois_info,
                         num_workers=int(num_workers), logger=main_window.logger_tab2
                     )
                     main_window.simulation_context.dic_samples = SA_samples
@@ -1206,7 +1208,7 @@ def sample_parameters(main_window):
         try:
             # Request number of samples from the user to run the global sampler
             if sampler not in ['Fractional Factorial', 'Finite Difference']:
-                N, ok = QInputDialog.getInt(main_window, "Number of Samples", "Enter the desired number of samples:", value=8, min=1)
+                N, ok = QInputDialog.getInt(main_window, "Number of Samples", "Enter the desired number of samples:", value=32, min=1)
             else:
                 N = None  # For Fractional Factorial and Finite Difference, N is not required
             main_window.global_SA_parameters["samples"] = run_global_sampler(main_window.global_SA_parameters, sampler, N=N)
@@ -1530,9 +1532,11 @@ def run_simulations_function(main_window):
                 return
             else:
                 main_window.update_output_tab2(main_window, "QoI(s) not defined: All data will be stored as mcds list.")
-                qoi_str = None
+                qois_info = None
         else:
-            qoi_str = ', '.join(main_window.qoi_funcs.keys())
+            # ModelAnalysisContext expects the actual {name: func} dict, not a
+            # display string of the names.
+            qois_info = main_window.qoi_funcs
     except Exception as e:
         main_window.update_output_tab2(main_window, f"Error setting up simulations: {e}")
         print(f"Error setting up simulations: {e}")
@@ -1572,14 +1576,14 @@ def run_simulations_function(main_window):
         if main_window.sampling_type_dropdown.currentText() == "Local":
             sampler = main_window.sampler_combo.currentText()
             # Model Analysis context
-            context = ModelAnalysisContext(db_file_name, model_config, sampler, main_window.local_SA_parameters, qoi_str, num_workers=int(num_workers), logger=main_window.logger_tab2)
+            context = ModelAnalysisContext(db_file_name, model_config, sampler, main_window.local_SA_parameters, qois_info, num_workers=int(num_workers), logger=main_window.logger_tab2)
             context.dic_samples = SA_samples
             context.cancelled = lambda: getattr(main_window, 'simulation_cancelled', False)
             run_simulations(context)
         elif main_window.sampling_type_dropdown.currentText() == "Global":
             sampler = main_window.sampler_combo.currentText()
             # Model Analysis context
-            context = ModelAnalysisContext(db_file_name, model_config, sampler, main_window.global_SA_parameters, qoi_str, num_workers=int(num_workers), logger=main_window.logger_tab2)
+            context = ModelAnalysisContext(db_file_name, model_config, sampler, main_window.global_SA_parameters, qois_info, num_workers=int(num_workers), logger=main_window.logger_tab2)
             context.dic_samples = SA_samples
             context.cancelled = lambda: getattr(main_window, 'simulation_cancelled', False)
             run_simulations(context)

@@ -130,6 +130,27 @@ class TestQoISerializationValidation:
         ctx = _make_context(tmp_path, "User-defined", {}, qois_info={})
         assert ctx.qois_dict == {}
 
+    def test_none_qois_info_accepted(self, tmp_path):
+        """Regression test: qois_info=None must not crash __init__ (as it did with
+        AttributeError: 'NoneType' object has no attribute 'items').
+
+        Calls ModelAnalysisContext directly rather than through _make_context,
+        whose own qois_info if qois_info is not None else {} normalization would
+        silently avoid ever exercising the real None path (as happened before
+        this fix, when the tab2 GUI passed None straight through and crashed).
+        None means "no QoI processing, store the raw mcds list" -- distinct from
+        {} ("compute zero QoIs per snapshot") -- so it must be preserved, not
+        coerced to {}.
+        """
+        ctx = ModelAnalysisContext(
+            str(tmp_path / "test.db"),
+            {"ini_path": "test.ini", "struc_name": "model"},
+            "User-defined",
+            {},
+            None,
+        )
+        assert ctx.qois_dict is None
+
     def test_string_qoi_function_accepted_directly(self, tmp_path):
         ctx = _make_context(tmp_path, "User-defined", {},
             qois_info={"live": "lambda df_cell: len(df_cell[df_cell['dead'] == False])"})
