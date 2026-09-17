@@ -239,7 +239,7 @@ def test_model_selection_validation():
 
 
 def test_model_selection_db_tables():
-    """Metadata NULLs the single-model columns for a selection run; Models has one row per candidate."""
+    """Metadata NULLs the single-model columns for a selection run; CandidateModels has one row per candidate."""
     import sqlite3
     from uq_physicell.abc import CalibrationContext
     from uq_physicell.abc.utils import insert_metadata_db, insert_models_db
@@ -267,10 +267,10 @@ def test_model_selection_db_tables():
         insert_models_db(db_path, ctx1)
         conn = sqlite3.connect(db_path)
         assert conn.execute("SELECT Ini_File_Path, StructureName FROM Metadata").fetchone() == (ini_path, 'strucA')
-        assert conn.execute("SELECT COUNT(*) FROM Models").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM CandidateModels").fetchone()[0] == 1
         conn.close()
 
-        # model selection -> Metadata NULLs ini/struc, Models has both rows
+        # model selection -> Metadata NULLs ini/struc, CandidateModels has both rows
         ctx2 = CalibrationContext(db_path=db_path, abc_options={'models': [
             {'name': 'A', 'model_config': {'ini_path': ini_path, 'struc_name': 'strucA'}, 'prior': prior},
             {'name': 'B', 'model_config': {'ini_path': ini_path, 'struc_name': 'strucB'}, 'prior': prior},
@@ -279,11 +279,120 @@ def test_model_selection_db_tables():
         insert_models_db(db_path, ctx2)
         conn = sqlite3.connect(db_path)
         assert conn.execute("SELECT Ini_File_Path, StructureName FROM Metadata").fetchone() == (None, None)
-        rows = conn.execute("SELECT ModelIndex, Name, StructureName FROM Models ORDER BY ModelIndex").fetchall()
+        rows = conn.execute("SELECT ModelIndex, Name, StructureName FROM CandidateModels ORDER BY ModelIndex").fetchall()
         assert rows == [(0, 'A', 'strucA'), (1, 'B', 'strucB')]
         # fingerprint columns exist (values may be NULL when the model can't be instantiated)
-        cols = {c[1] for c in conn.execute("PRAGMA table_info(Models)")}
+        cols = {c[1] for c in conn.execute("PRAGMA table_info(CandidateModels)")}
         assert {'Ini_Hash', 'XML_Hash', 'Rules_Hash', 'Structure_Config_Hash', 'Effective_Run_Hash'} <= cols
+        conn.close()
+    finally:
+        for p in (ini_path, db_path):
+            if os.path.exists(p):
+                os.unlink(p)
+
+
+def test_insert_models_db_does_not_collide_with_pyabc_models_table():
+    """Regression test: pyABC's own storage creates a lowercase `models` table in
+    the same database file. SQLite resolves table names case-insensitively, so a
+    table literally named `Models` would silently fail to be created ("IF NOT
+    EXISTS" sees pyABC's own table) and every insert would then raise
+    "no such column: ModelIndex" against pyABC's table instead. insert_models_db
+    must use a non-colliding name (CandidateModels) and leave pyABC's table alone.
+    """
+    import sqlite3
+    from uq_physicell.abc import CalibrationContext
+    from uq_physicell.abc.utils import insert_models_db
+    from pyabc import Distribution, RV
+
+    ini_content = "[strucA]\nnumReplicates = 2\n"
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ini', delete=False) as ini_file:
+        ini_file.write(ini_content)
+        ini_path = ini_file.name
+    db_path = tempfile.NamedTemporaryFile(suffix='.db', delete=False).name
+
+    try:
+        # Stand in for pyABC's own schema, already present by the time
+        # insert_models_db runs in a real calibration (abc_smc.new() creates it
+        # before run_abc_calibration ever calls insert_models_db).
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE models (id INTEGER PRIMARY KEY, name TEXT)")
+        conn.execute("INSERT INTO models VALUES (0, 'pyabc_internal_name')")
+        conn.commit()
+        conn.close()
+
+        prior = Distribution(param1=RV('uniform', 0, 1.0))
+        ctx = CalibrationContext(
+            db_path=db_path,
+            model_config={'ini_path': ini_path, 'struc_name': 'strucA'},
+            prior=prior, abc_options={},
+            obsData={'QoI1': np.array([1.0, 1.1])},
+            obsData_columns={'QoI1': 'QoI1_data'},
+            qoi_functions={'QoI1': 'lambda df: df["QoI1"].values'},
+            distance_functions={'QoI1': {'function': 'euclidean', 'weight': 1.0}},
+        )
+        insert_models_db(db_path, ctx)  # must not raise
+
+        conn = sqlite3.connect(db_path)
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert {'models', 'CandidateModels'} <= tables
+        # pyABC's own table must be untouched.
+        assert conn.execute("SELECT id, name FROM models").fetchall() == [(0, 'pyabc_internal_name')]
+        assert conn.execute("SELECT ModelIndex, Name FROM CandidateModels").fetchall() == [(0, 'Model_0')]
+        conn.close()
+    finally:
+        for p in (ini_path, db_path):
+            if os.path.exists(p):
+                os.unlink(p)
+
+
+def test_metadata_persisted_before_calibration_runs():
+    """Regression test: Metadata/CandidateModels are pure static configuration
+    and must be persisted before run_calibration() executes, not after.
+
+    run_calibration() is a single, blocking abc_smc.run(max_nr_populations=...)
+    call that does not return until pyABC has completed every requested
+    population (or hit the simulation cap) -- for a real, multi-hour/day run
+    with no convergence_check_func configured (the common case, e.g. ex11's
+    uq_script.py), that is the entire calibration. Persisting only after it
+    returns meant a crash, timeout, or kill anywhere during that call -- the
+    likely place for exactly that on a long run -- left pyABC's own History
+    file fully populated but Metadata/CandidateModels completely empty.
+    """
+    import sqlite3
+    from unittest.mock import patch
+    from uq_physicell.abc import CalibrationContext
+    from uq_physicell.abc.abc_context import run_abc_calibration
+    from pyabc import Distribution, RV
+
+    ini_content = "[strucA]\nnumReplicates = 2\n"
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ini', delete=False) as ini_file:
+        ini_file.write(ini_content)
+        ini_path = ini_file.name
+    db_path = tempfile.NamedTemporaryFile(suffix='.db', delete=False).name
+    os.remove(db_path)  # must not exist yet -- abc_smc.new() is what creates it
+
+    try:
+        prior = Distribution(param1=RV('uniform', 0, 1.0))
+        calib_context = CalibrationContext(
+            db_path=db_path,
+            obsData={'QoI1': np.array([1.0, 1.1])},
+            obsData_columns={'QoI1': 'QoI1_data'},
+            qoi_functions={'QoI1': 'lambda df: df["QoI1"].values'},
+            distance_functions={'QoI1': {'function': 'euclidean', 'weight': 1.0}},
+            model_config={'ini_path': ini_path, 'struc_name': 'strucA'},
+            prior=prior,
+            abc_options={},
+        )
+
+        # Simulate a crash inside the (normally multi-hour) calibration call.
+        with patch.object(CalibrationContext, "run_calibration", side_effect=RuntimeError("simulated crash mid-run")):
+            with pytest.raises(RuntimeError, match="simulated crash mid-run"):
+                run_abc_calibration(calib_context=calib_context)
+
+        assert os.path.exists(db_path), "abc_smc.new() should have created the database before the simulated crash"
+        conn = sqlite3.connect(db_path)
+        assert conn.execute("SELECT Ini_File_Path, StructureName FROM Metadata").fetchone() == (ini_path, 'strucA')
+        assert conn.execute("SELECT COUNT(*) FROM CandidateModels").fetchone()[0] == 1
         conn.close()
     finally:
         for p in (ini_path, db_path):

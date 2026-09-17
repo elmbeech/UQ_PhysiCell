@@ -1,4 +1,5 @@
 
+import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -6,6 +7,57 @@ if TYPE_CHECKING:
 from uq_physicell import __version__ as uq_physicell_version
 from pcdl import __version__ as pcdl_version
 from pyabc import __version__ as pyabc_version
+
+logger = logging.getLogger(__name__)
+
+
+def patch_pyabc_dataframe_csv_fallback():
+    """Make pyABC's DataFrame deserialization tolerate a database written with
+    a different pyarrow availability than the one reading it now.
+
+    pyABC's df_to_bytes/df_from_bytes (pyabc/storage/dataframe_bytes_storage.py)
+    pick parquet vs. CSV purely from whether *this* process has pyarrow
+    installed -- a blob is never tagged with which format it was actually
+    written in. A calibration resumed on a different machine (e.g. started on
+    a cluster node without pyarrow, resumed on a workstation that has it) ends
+    up with a mix of CSV- and parquet-encoded summary-statistics blobs in the
+    same database. Reading then assumes "pyarrow available -> must be
+    parquet" and crashes with pyarrow.lib.ArrowInvalid ("Parquet magic bytes
+    not found in footer") on the CSV-written rows, even though pyABC's own CSV
+    reader (df_from_bytes_csv) reads them fine.
+
+    Patches the parquet reader to fall back to the CSV reader specifically on
+    a parquet-format error -- the same spirit as pyABC's own (narrower)
+    legacy-msgpack fallback for pre-0.9.14 databases. Called automatically on
+    `import uq_physicell.abc`; safe to call more than once. A no-op if
+    pyarrow isn't installed here at all (pyABC then uses CSV exclusively
+    already, so there is nothing to patch).
+    """
+    try:
+        import pyarrow
+        from pyabc.storage import dataframe_bytes_storage as _dbs
+    except ImportError:
+        return
+
+    if getattr(_dbs.df_from_bytes_parquet, "_uq_physicell_csv_fallback", False):
+        return  # already patched
+
+    _orig_df_from_bytes_parquet = _dbs.df_from_bytes_parquet
+
+    def _df_from_bytes_parquet_with_csv_fallback(bytes_):
+        try:
+            return _orig_df_from_bytes_parquet(bytes_)
+        except (pyarrow.lib.ArrowInvalid, pyarrow.lib.ArrowIOError):
+            logger.debug(
+                "pyABC summary-statistics blob is not parquet (likely written "
+                "in an environment without pyarrow available); falling back "
+                "to pyABC's CSV reader."
+            )
+            return _dbs.df_from_bytes_csv(bytes_)
+
+    _df_from_bytes_parquet_with_csv_fallback._uq_physicell_csv_fallback = True
+    _dbs.df_from_bytes_parquet = _df_from_bytes_parquet_with_csv_fallback
+
 
 def insert_adaptive_weights_db(db_file, dict_distances, dict_adaptive_weights):
     import sqlite3
@@ -56,19 +108,24 @@ def _model_config_fingerprint(spec) -> dict:
 
 
 def insert_models_db(db_file: str, abc_context: "CalibrationContext"):
-    """Store the candidate ABC-SMC model specs in a ``Models`` table.
+    """Store the candidate ABC-SMC model specs in a ``CandidateModels`` table.
 
     One row per model in ``abc_context.models`` (a single row for a plain
-    single-model calibration). Keeps pyABC's own schema untouched. The per-model
-    effective-config fingerprint hashes let a reader tell candidates that differ in
-    their PhysiCell configuration (``struc_name``, XML, rules) apart from ones that
-    only differ by prior / fixed parameters.
+    single-model calibration). Keeps pyABC's own schema untouched -- note the
+    name: pyABC's own storage backend already creates a lowercase ``models``
+    table in the same database file, and SQLite resolves table names
+    case-insensitively, so naming this table ``Models`` collides with it (silently
+    skipping table creation, since it already "exists", then failing every insert
+    with "no such column"). The per-model effective-config fingerprint hashes let
+    a reader tell candidates that differ in their PhysiCell configuration
+    (``struc_name``, XML, rules) apart from ones that only differ by prior / fixed
+    parameters.
     """
     import json
     import sqlite3
     conn = sqlite3.connect(db_file)
     cursor = conn.cursor()
-    cursor.execute("""CREATE TABLE IF NOT EXISTS Models (
+    cursor.execute("""CREATE TABLE IF NOT EXISTS CandidateModels (
                     ModelIndex INTEGER PRIMARY KEY,
                     Name TEXT,
                     Ini_File_Path TEXT,
@@ -86,7 +143,7 @@ def insert_models_db(db_file: str, abc_context: "CalibrationContext"):
     for idx, spec in enumerate(abc_context.models):
         fp = _model_config_fingerprint(spec)
         cursor.execute(
-            """INSERT OR REPLACE INTO Models
+            """INSERT OR REPLACE INTO CandidateModels
                (ModelIndex, Name, Ini_File_Path, StructureName, InputFolder, OutputFolder,
                 NumReplicates, FixedParams, PriorSummary,
                 Ini_Hash, XML_Hash, Rules_Hash, Structure_Config_Hash, Effective_Run_Hash)
@@ -112,43 +169,12 @@ def insert_models_db(db_file: str, abc_context: "CalibrationContext"):
     conn.close()
 
 
-def insert_model_probabilities_db(db_file: str, history):
-    """Store per-population ABC-SMC model probabilities in a ``ModelProbabilities`` table.
-
-    Values come straight from ``pyabc.History.get_model_probabilities()``.
-    """
-    import sqlite3
-    try:
-        df = history.get_model_probabilities()
-    except Exception:
-        return
-    if df is None or len(df) == 0:
-        return
-    conn = sqlite3.connect(db_file)
-    cursor = conn.cursor()
-    cursor.execute("""CREATE TABLE IF NOT EXISTS ModelProbabilities (
-                    Population INTEGER,
-                    ModelIndex INTEGER,
-                    Probability DOUBLE,
-                    PRIMARY KEY (Population, ModelIndex))""")
-    for population, row in df.iterrows():
-        for model_index, probability in row.items():
-            # column labels may be scalars or 1-tuples ('m',) depending on pyABC version
-            m = model_index[-1] if isinstance(model_index, tuple) else model_index
-            cursor.execute(
-                "INSERT OR REPLACE INTO ModelProbabilities (Population, ModelIndex, Probability) VALUES (?, ?, ?)",
-                (int(population), int(m), float(probability)),
-            )
-    conn.commit()
-    conn.close()
-
-
 def insert_metadata_db(db_file: str, abc_context: "CalibrationContext"):
     """Write the run-level ``Metadata`` row (one row, ``Method='ABC'``).
 
     ``Ini_File_Path`` / ``StructureName`` describe a single calibrated model. For a
     model-selection run (more than one candidate) they are written as ``NULL`` and
-    the per-model configuration lives in the ``Models`` table instead.
+    the per-model configuration lives in the ``CandidateModels`` table instead.
     """
     import sqlite3
     model_selection = len(abc_context.models) > 1

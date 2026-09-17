@@ -22,7 +22,6 @@ from uq_physicell.abc.utils import (
     insert_adaptive_weights_db,
     insert_metadata_db,
     insert_models_db,
-    insert_model_probabilities_db,
 )
 from uq_physicell.utils import run_replicate_serializable
 from ..utils.sumstats import _convert_qoi_function_to_string
@@ -689,24 +688,29 @@ def run_abc_calibration( calib_context: CalibrationContext) -> History:
         # Load or create database
         logger.info("💾 Managing database...")
         resume_db, current_populations, current_simulations = calib_context.load_or_create_database(abc_smc)
-        
-        # Run calibration
-        logger.info("🎲 Starting calibration run...")
-        calib_context.run_calibration(abc_smc, resume_db, current_populations, current_simulations)
 
-        # Persist run + model metadata now, right after the first run() call
-        # returns, rather than waiting until after the convergence-extension
-        # loop below. That loop can run for a long time (or indefinitely on a
-        # multi-day cluster job) and is the most likely place for a crash or
-        # timeout; without this, such a failure leaves pyABC's own History file
-        # fully populated but the Metadata/Models tables completely empty.
-        # Idempotent (INSERT OR REPLACE) so it also refreshes after a resumed
-        # calibration, not only on a fresh run.
+        # Persist run + model metadata *before* running any simulation, not
+        # after. This is pure static configuration (model names, priors, config
+        # fingerprint hashes) that doesn't depend on any simulation result, so
+        # there's no reason to defer it. run_calibration() below is a single
+        # blocking abc_smc.run(max_nr_populations=..., ...) call that does not
+        # return until pyABC has completed *all* requested populations (or hit
+        # the simulation cap) -- for a multi-hour/day run with no
+        # convergence_check_func configured (the common case), that is the
+        # entire calibration. Writing metadata only after it returns meant a
+        # crash, timeout, or kill anywhere during that single call -- the most
+        # likely place for exactly that to happen -- left pyABC's own History
+        # file populated but Metadata/CandidateModels completely empty.
+        # Idempotent (INSERT OR REPLACE) so it also refreshes on a later resume.
         try:
             insert_metadata_db(calib_context.db_path, calib_context)
             insert_models_db(calib_context.db_path, calib_context)
         except Exception as e:
             logger.warning(f"Could not persist calibration metadata: {e}")
+
+        # Run calibration
+        logger.info("🎲 Starting calibration run...")
+        calib_context.run_calibration(abc_smc, resume_db, current_populations, current_simulations)
 
         # Check convergence and run additional populations if needed
         if calib_context.convergence_check_func is not None and getattr(calib_context, 'mode', 'cluster') == 'cluster':
@@ -734,12 +738,14 @@ def run_abc_calibration( calib_context: CalibrationContext) -> History:
                 if calib_context.adaptive_distance:
                     insert_adaptive_weights_db(calib_context.db_path, dict_distances=calib_context.distance_functions, dict_adaptive_weights=load_dict_from_json(calib_context.adaptive_distance_file))
         
-        # Persist results that depend on the final history state (model
-        # probabilities, adaptive weights) -- the run + model metadata itself
-        # was already persisted right after the first run() call, above.
+        # Persist results that depend on the final history state (adaptive
+        # weights) -- the run + model metadata itself was already persisted
+        # right after the first run() call, above. Model probabilities are not
+        # persisted separately: they're pure derived data already recoverable
+        # from pyABC's own tables via history.get_model_probabilities(), so
+        # there is nothing here worth a second, independently-stale copy of.
         try:
             if calib_context.model_selection:
-                insert_model_probabilities_db(calib_context.db_path, abc_smc.history)
                 logger.info(f"🔀 Final model probabilities:\n{abc_smc.history.get_model_probabilities()}")
             if (calib_context.adaptive_distance and calib_context.adaptive_distance_file
                     and os.path.exists(calib_context.adaptive_distance_file)):

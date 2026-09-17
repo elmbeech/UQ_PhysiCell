@@ -5,6 +5,7 @@ This module provides utility functions for model wrapping, summary statistics,
 and quantity of interest (QoI) calculations for PhysiCell simulations.
 """
 from .distances import (
+    relative_rmse,
     SumSquaredDifferences,
     Manhattan,
     Chebyshev
@@ -22,6 +23,7 @@ from .sumstats import (
 )
 
 __all__ = [
+    'relative_rmse',
     'SumSquaredDifferences',
     'Manhattan',
     'Chebyshev',

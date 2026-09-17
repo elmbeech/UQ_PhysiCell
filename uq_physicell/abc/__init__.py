@@ -10,6 +10,11 @@ from .abc_context import (
     ModelSpec,
     run_abc_calibration,
 )
+from .utils import patch_pyabc_dataframe_csv_fallback
+
+# Applied on import so every user of CalibrationContext/run_abc_calibration gets
+# it for free -- see patch_pyabc_dataframe_csv_fallback's docstring.
+patch_pyabc_dataframe_csv_fallback()
 
 __all__ = [
     'CalibrationContext',
