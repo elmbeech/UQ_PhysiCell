@@ -1,4 +1,4 @@
-Time,Live_Cells,live_cell_count_std,live_cell_count_min,live_cell_count_max,live_cell_count_count,Sum_Dead_Cells,sum_dead_cell_count_std,sum_dead_cell_count_min,sum_dead_cell_count_max,sum_dead_cell_count_count
+Time,Live_Cells,live_cell_count_std,live_cell_count_min,live_cell_count_max,live_cell_count_count,Sum_Dead_Cells,integrated_dead_cell_count_std,integrated_dead_cell_count_min,integrated_dead_cell_count_max,integrated_dead_cell_count_count
 0.0,511.0,0.0,511,511,5,,,,,0
 240.0,581.4,6.767569726275451,571,590,5,,,,,0
 480.0,621.4,4.335896677735768,614,624,5,,,,,0
