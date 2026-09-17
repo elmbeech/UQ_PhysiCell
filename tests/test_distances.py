@@ -1,8 +1,9 @@
 import unittest
 import numpy as np
+import pandas as pd
 
 # Import the distance functions to test
-from uq_physicell.utils import SumSquaredDifferences, Manhattan, Chebyshev
+from uq_physicell.utils import SumSquaredDifferences, Manhattan, Chebyshev, relative_rmse
 
 
 class TestDistanceFunctions(unittest.TestCase):
@@ -255,6 +256,74 @@ class TestDistanceFunctions(unittest.TestCase):
         self.assertAlmostEqual(result_ssd, 0.33, places=10)
         self.assertAlmostEqual(result_manhattan, 0.9, places=10)
         self.assertAlmostEqual(result_chebyshev, 0.5, places=10)
+
+
+class TestRelativeRMSE(unittest.TestCase):
+
+    def setUp(self):
+        self.obs = {"QoI1": np.array([1.0, 2.0, 3.0, 4.0])}
+
+    def test_none_sim_returns_inf(self):
+        """A failed simulation (sim=None) must be rejected via np.inf, matching
+        the convention used by SumSquaredDifferences/Manhattan/Chebyshev."""
+        self.assertEqual(relative_rmse(None, self.obs, "QoI1"), np.inf)
+
+    def test_plain_array_matches_hand_computed_value(self):
+        sim = {"QoI1": np.array([1.5, 2.0, 2.0, 5.0])}
+        # diffs: -0.5, 0, 1, -1; denom = max(|obs|,1) = [1,2,3,4]
+        # terms: -0.5, 0, 0.333..., -0.25 -> mean(sq) = 0.10590277...
+        result = relative_rmse(sim, self.obs, "QoI1")
+        self.assertAlmostEqual(result, 0.3254270698294439, places=10)
+
+    def test_dataframe_reconstructed_from_storage_matches_plain_array(self):
+        """pyABC reconstructs historical particles from storage as a DataFrame
+        with ['time', key] columns rather than the plain 1-D array a live
+        simulation produces for the same key; both shapes must give the same
+        result once the key column is pulled out."""
+        plain_sim = {"QoI1": np.array([1.5, 2.0, 2.0, 5.0])}
+        df_sim = {"QoI1": pd.DataFrame({"time": [0, 1, 2, 3], "QoI1": [1.5, 2.0, 2.0, 5.0]})}
+
+        result_plain = relative_rmse(plain_sim, self.obs, "QoI1")
+        result_df = relative_rmse(df_sim, self.obs, "QoI1")
+
+        self.assertEqual(result_plain, result_df)
+        self.assertAlmostEqual(result_df, 0.3254270698294439, places=10)
+
+    def test_missing_key_in_sim_returns_inf(self):
+        sim = {"other_key": np.array([1.0, 2.0, 3.0, 4.0])}
+        self.assertEqual(relative_rmse(sim, self.obs, "QoI1"), np.inf)
+
+    def test_missing_key_in_obs_returns_inf(self):
+        sim = {"QoI1": np.array([1.0, 2.0, 3.0, 4.0])}
+        self.assertEqual(relative_rmse(sim, {"other_key": np.array([1.0])}, "QoI1"), np.inf)
+
+    def test_shape_mismatch_returns_inf(self):
+        """A run that stopped early / produced malformed output has a different
+        length than the observed series -- must reject, not raise or broadcast."""
+        sim = {"QoI1": np.array([1.0, 2.0, 3.0])}
+        self.assertEqual(relative_rmse(sim, self.obs, "QoI1"), np.inf)
+
+    def test_all_nan_returns_inf(self):
+        obs_all_nan = {"QoI1": np.array([np.nan, np.nan, np.nan, np.nan])}
+        sim = {"QoI1": np.array([1.0, 2.0, 3.0, 4.0])}
+        self.assertEqual(relative_rmse(sim, obs_all_nan, "QoI1"), np.inf)
+
+    def test_non_overlapping_finite_values_returns_inf(self):
+        """Both series have finite values, but never at the same index -- the
+        overlap mask is empty, so there is nothing to compute an RMSE over."""
+        obs_disjoint = {"QoI1": np.array([1.0, np.nan, 3.0, np.nan])}
+        sim_disjoint = {"QoI1": np.array([np.nan, 2.0, np.nan, 4.0])}
+        self.assertEqual(relative_rmse(sim_disjoint, obs_disjoint, "QoI1"), np.inf)
+
+    def test_endpoint_only_obs_restricts_to_finite_overlap(self):
+        """A cumulative/endpoint QoI (e.g. a death count) is NaN everywhere
+        except the last time point; the RMSE must be computed only over the
+        finite overlap, not corrupted by (or rejected because of) the NaNs."""
+        obs = {"QoI1": np.array([np.nan, np.nan, 10.0])}
+        sim = {"QoI1": np.array([1.0, 2.0, 12.0])}
+        # only the last point is finite in both: diff=-2, denom=max(10,1)=10 -> 0.2
+        result = relative_rmse(sim, obs, "QoI1")
+        self.assertAlmostEqual(result, 0.2, places=10)
 
 
 if __name__ == '__main__':

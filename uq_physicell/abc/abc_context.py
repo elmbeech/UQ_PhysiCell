@@ -443,7 +443,14 @@ class CalibrationContext:
             # Take the mean of all columns in the same sampleID and time
             return results_df.pivot_table(index=['sampleID','time'])
         except Exception as e:
-            raise ValueError(f"Error in _default_aggregation_func for sampleID: {replicate_results.values()[0]['sampleID'].unique()}")
+            # `.values()` is a dict_values view, not subscriptable -- guard both
+            # that and the empty-dict case so this handler can't itself raise a
+            # confusing, unrelated TypeError/IndexError that masks `e`.
+            sample_ids = (
+                list(replicate_results.values())[0]['sampleID'].unique()
+                if replicate_results else "unknown (no replicates)"
+            )
+            raise ValueError(f"Error in _default_aggregation_func for sampleID: {sample_ids}: {e}") from e
 
     def _run_physicell_model_sequential(self, pars, model_spec: ModelSpec, sample_id=None, replicate_id=None):
         """Run one candidate PhysiCell model sequentially."""
