@@ -1766,7 +1766,10 @@ def plot_sa_results(main_window):
             if main_window.sampling_type_dropdown.currentText() == "Global":
                 SA_method = main_window.SA_method_combo.currentText()
                 param_names = [key for key in main_window.global_SA_parameters.keys() if key != "samples"]
-                plot_global_sa_results(param_names, SA_method, main_window.qoi_time_values, main_window.sa_results, selected_qoi, selected_sm, ax)
+                # Check if the selected sensitivity measure has a corresponding confidence interval in the results
+                selected_ci = selected_sm+"_conf" 
+                if selected_ci not in sensitivity_measurements: selected_ci = None
+                plot_global_sa_results(param_names, SA_method, main_window.qoi_time_values, main_window.sa_results, selected_qoi, selected_sm, ax, selected_ci=selected_ci)
             elif main_window.sampling_type_dropdown.currentText() == "Local":
                 SA_method = main_window.SA_method_combo.currentText()
                 plot_local_sa_results(SA_method, main_window.qoi_time_values, main_window.sa_results, selected_qoi, ax)
