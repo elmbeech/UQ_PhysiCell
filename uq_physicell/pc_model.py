@@ -205,8 +205,18 @@ class PhysiCell_Model:
         Returns:
             subprocess.Popen: Process handle for the running simulation
         """
-        callingModel = [self.PC_executable, XMLFile]
-        process = subprocess.Popen(callingModel, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        # PhysiCell resolves any relative path left inside the XML (e.g. a
+        # CSV-based initial_conditions/cell_positions/folder at its template
+        # default, like "./config") relative to its own process cwd -- and
+        # that default only exists alongside the executable itself, since
+        # that's where `make load PROJ=...` copies a project's config/
+        # folder. Run from there; pass absolute paths so the executable and
+        # XML file are still found regardless, and so anything else already
+        # made absolute when written into the XML (output/rules folders --
+        # see _setup_model_input) doesn't need the caller's own cwd either.
+        pc_executable_abs = os.path.abspath(self.PC_executable)
+        callingModel = [pc_executable_abs, os.path.abspath(XMLFile)]
+        process = subprocess.Popen(callingModel, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, cwd=os.path.dirname(pc_executable_abs))
         
         # Register the process if sample_id and replicate_id are provided
         if sample_id is not None and replicate_id is not None:
@@ -440,7 +450,9 @@ def _setup_model_input(model: PhysiCell_Model, SampleID: int, ReplicateID: int, 
     if model.parameters_rules:
         if model.verbose:
             print(f"\t\t\t>>> Setting up rules input ...")
-        dic_xml_parameters['.//cell_rules/rulesets/ruleset/folder'] = model.input_folder
+        # Absolute, since run_simulation_subprocess now launches PhysiCell with its
+        # cwd set to the executable's own directory, not the caller's.
+        dic_xml_parameters['.//cell_rules/rulesets/ruleset/folder'] = os.path.abspath(model.input_folder) + os.sep
         dic_xml_parameters['.//cell_rules/rulesets/ruleset/filename'] = model._get_rules_fileName(SampleID, ReplicateID)
         RuleFile_out = model.input_folder + model._get_rules_fileName(SampleID, ReplicateID)
         dic_rules_temp = {}
@@ -477,7 +489,8 @@ def _setup_model_input(model: PhysiCell_Model, SampleID: int, ReplicateID: int, 
 
     if model.verbose:
         print(f"\t\t\t>>> Setting up XML input...")
-    dic_xml_parameters['.//save/folder'] = model._get_output_path(SampleID, ReplicateID)
+    # Absolute, for the same reason as the rules folder above.
+    dic_xml_parameters['.//save/folder'] = os.path.abspath(model._get_output_path(SampleID, ReplicateID)) + os.sep
     dic_xml_parameters['./parallel/omp_num_threads'] = model.omp_num_threads
     
     # If not defined in .ini file, set initial condition folder to the folder of the reference XML file
