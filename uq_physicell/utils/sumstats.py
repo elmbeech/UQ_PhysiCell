@@ -1,12 +1,15 @@
-import pcdl
+from __future__ import annotations
+import ast
+from collections.abc import Callable
+import inspect
 import numpy as np
-import scipy
 import pandas as pd
-from shutil import rmtree
-from typing import Union
+import pcdl
 import re
-import inspect, ast
+import scipy
+from shutil import rmtree
 import textwrap
+from typing import Union, Any
     
 def summ_func_FinalPopLiveDead(outputPath:str,summaryFile:Union[str,None], dic_params:dict, SampleID:int, ReplicateID:int) -> Union[pd.DataFrame,None]:
     """
@@ -95,44 +98,119 @@ def _check_functions_need_microenv(qoi_funcs:dict) -> bool:
     # If none need it,
     return False
 
-def safe_call_qoi_function(func: callable, mcds:Union[pcdl.TimeStep,None]=None, list_mcds:Union[list,None]=None ):
-    """
-    Safely call a QoI function with the appropriate dataframe based on parameter inspection.
-    
-    Args:
-        func: The QoI function to call
-        mcds: pcdl.TimeStep or None -> The mcds object for single snapshot
-        list_mcds: list of pcdl.TimeStep or None -> The mcds time series object for multiple snapshots
-    
-    Returns:
-        Result of the QoI function
-    """
-    # Require stored metadata for dispatch.
-    param_name = getattr(func, '__param_name__', None)
+def _qoi_first_parameter_name(func: Callable[..., Any]) -> str | None:
+    """Return the first positional parameter name of a QoI callable."""
+    try:
+        signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        return None
 
-    # Reject non-wrapped callables (no __param_name__ attribute).
-    if param_name is None:
-        raise ValueError(
-            "QoI function is missing required '__param_name__' metadata. "
-            "Wrap callables with _create_wrapper_for_qoi_function or recreate_qoi_functions first."
-        )
-    
-    # Handle wrapped/string-defined QoI functions.
-    if param_name in ['df_cell', 'df'] and mcds is not None: # Function expects cell dataframe
-        return func(mcds.get_cell_df())
-    elif param_name in ['df_subs'] and mcds is not None: # Function expects substrate dataframe
-        return func(mcds.get_conc_df())
-    elif param_name in ['mcds'] and mcds is not None: # Function expects the mcds object
+    for parameter in signature.parameters.values():
+        if parameter.kind in {
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            }:
+            return parameter.name
+
+    return None
+
+def safe_call_qoi_function(
+        func: Callable[..., Any],
+        mcds: Any,
+        list_mcds: list[Any] | tuple[Any, ...] | None = None,
+        data_cache: dict[str, Any] | None = None,
+        input_name: str | None = None,
+    ) -> Any:
+    """
+    Safely call a QoI function with the appropriate input representation.
+
+    Args:
+        func:
+            QoI function to call.
+
+        mcds:
+            pcdl.TimeStep or None. Single simulation snapshot.
+
+        list_mcds:
+            Sequence of pcdl.TimeStep objects or None. Full time series.
+            This object is not copied into the cache.
+
+        data_cache:
+            Caller-owned dictionary valid for exactly one timestep.
+            Reusing the same dictionary across QoI calls allows derived
+            representations such as df_cell, df_subs, and adata to be reused.
+            Never reuse the cache across timesteps.
+
+        input_name:
+            Optional pre-inspected first argument name.
+            Supplying this avoids repeated inspect.signature calls.
+
+    Returns:
+        Result of the QoI function.
+    """
+    if data_cache is None:
+        # Never use data_cache={} in the function signature.
+        data_cache = {}
+
+    # Prefer explicitly supplied / inspected function signature.
+    if input_name is None:
+        input_name = _qoi_first_parameter_name(func)
+
+    # Wrapped/string-defined QoIs may carry their original input convention
+    # in __param_name__. Use this when signature inspection does not give us
+    # a recognized UQ-PhysiCell input name.
+    if input_name not in {
+            'df', 'df_cell',
+            'df_subs', 'df_conc',
+            'adata',
+            'mcds',
+            'mcds_ts',
+        }:
+        param_name = getattr(func, '__param_name__', None)
+        if param_name is not None:
+            input_name = param_name
+
+    if input_name in {'df', 'df_cell'}:
+        if mcds is None:
+            raise ValueError(f"QoI function expects '{input_name}', but mcds is None.")
+        if 'df_cell' not in data_cache:
+            data_cache['df_cell'] = mcds.get_cell_df()
+        return func(data_cache['df_cell'])
+
+    if input_name in {'df_subs', 'df_conc'}:
+        if mcds is None:
+            raise ValueError(f"QoI function expects '{input_name}', but mcds is None.")
+        if 'df_subs' not in data_cache:
+            data_cache['df_subs'] = mcds.get_conc_df()
+        return func(data_cache['df_subs'])
+
+    if input_name == 'adata':
+        if mcds is None:
+            raise ValueError("QoI function expects 'adata', but mcds is None.")
+        if 'adata' not in data_cache:
+            data_cache['adata'] = mcds.get_anndata()
+        return func(data_cache['adata'])
+
+    if input_name == 'mcds':
+        if mcds is None:
+            raise ValueError("QoI function expects 'mcds', but mcds is None.")
         return func(mcds)
-    elif param_name in ['mcds_ts'] and list_mcds is not None: # Function expects the mcds time series object
-        if mcds == list_mcds[-1]: # Ensure we only compute once per time series (last mcds passed)
+
+    if input_name == 'mcds_ts':
+        if list_mcds is None:
+            raise ValueError("QoI function expects 'mcds_ts', but list_mcds is None.")
+        if mcds is None:
+            raise ValueError("QoI function expects 'mcds_ts', but mcds is None.")
+        # Compute time-series QoIs only once, on the last snapshot.
+        if mcds is list_mcds[-1]:
             return func(list_mcds)
-        else:
-            return None # Skip computation for other snapshots
+        return None
 
     raise ValueError(
-        f"Could not call QoI function with param_name='{param_name}', "
-        f"mcds provided={mcds is not None}, list_mcds provided={list_mcds is not None}."
+        f"Could not dispatch QoI function. "
+        f"Detected input_name={input_name!r}, "
+        f"mcds provided={mcds is not None}, "
+        f"list_mcds provided={list_mcds is not None}."
     )
 
 def _create_wrapper_for_qoi_function(func: callable, param_name: str, qoi_name: str) -> callable:
