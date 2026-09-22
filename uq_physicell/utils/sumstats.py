@@ -584,7 +584,7 @@ def qoi_func_relational_ph( df: pd.DataFrame, landmark_type: str, witness_type: 
  
     # ===== PLOT =====
     if ax is not None:
+        print(f"✓ Computed {dim}D relational PH: {len(vec)} features extracted")
         axes = gudhi.plot_persistence_diagram(diag, axes=ax)
- 
-    print(f"✓ Computed {dim}D relational PH: {len(vec)} features extracted")
+    
     return vec, diag
