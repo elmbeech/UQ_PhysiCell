@@ -1,10 +1,15 @@
+from __future__ import annotations
+import cloudpickle
+from collections.abc import Mapping
+from concurrent.futures import ProcessPoolExecutor
+import gc
 import numpy as np
 import pandas as pd
-from typing import Union
+from typing import Union, Any
 
 # My local modules
 from ..database.ma_db import load_output, load_samples, check_db_consistency
-from ..utils.sumstats import recreate_qoi_functions, safe_call_qoi_function
+from ..utils.sumstats import recreate_qoi_functions, safe_call_qoi_function, _qoi_first_parameter_name
 
 def _reshape_sa_expanded_data(expanded_data: pd.DataFrame, qoi_columns: list) -> pd.DataFrame:
     """Reshape expanded sensitivity analysis data for pivot table analysis.
@@ -105,83 +110,210 @@ def mcds_list_to_qoi_df_for_sa(recreated_qoi_funcs, all_sample_ids, chunk_size, 
     df_qois = df_qois.reset_index(drop=True)
     return df_qois
 
-def mcds_list_to_qoi_df_long(recreated_qoi_funcs, all_sample_ids, chunk_size, db_file, verbose=False) -> pd.DataFrame:
-    """Convert a list of MCDS objects to a DataFrame  of quantities of interest in long format.
 
-    This function processes a list of MCDS simulation results, extracting relevant
-    quantities of interest (QoIs) at each time point and organizing them into a long
-    structured DataFrame.
+_QOI_WORKER = {}
+def _qoi_worker_init(db_file, recreated_qoi_funcs_bytes):
+    """Initialize QoI state once per worker process."""
+    recreated_qoi_funcs = cloudpickle.loads(recreated_qoi_funcs_bytes)
+    qoi_plan = [
+        (qoi_name, qoi_func, _qoi_first_parameter_name(qoi_func))
+        for qoi_name, qoi_func
+        in recreated_qoi_funcs.items()
+    ]
+    _QOI_WORKER.clear()
+    _QOI_WORKER.update({
+        "db_file": db_file,
+        "timestep_plan": [entry for entry in qoi_plan if entry[2] != "mcds_ts"],
+        "timeseries_plan": [entry for entry in qoi_plan if entry[2] == "mcds_ts"],
+    })
+
+
+def _flatten_qoi_value(qoi_name: str, value: Any) -> dict[str, Any]:
+    """Flatten common QoI return types into long-format output columns."""
+    if isinstance(value, pd.Series):
+        return {f"{qoi_name}_{idx}": item for idx, item in value.items()}
+
+    if isinstance(value, Mapping):
+        return {f"{qoi_name}_{key}": item for key, item in value.items()}
+
+    if isinstance(value, pd.DataFrame):
+        squeezed = value.squeeze()
+        if isinstance(squeezed, pd.Series):
+            return {f"{qoi_name}_{idx}": item for idx, item in squeezed.items()}
+        if np.ndim(squeezed) == 0:
+            return {
+                qoi_name:
+                squeezed.item() if hasattr(squeezed, "item") else squeezed
+            }
+        # Preserve unusual multidimensional output rather than inventing column
+        # semantics silently.
+        return {qoi_name: value}
+
+    if isinstance(value, np.ndarray):
+        if value.ndim == 0:
+            return {qoi_name: value.item()}
+        if value.ndim == 1 and value.size == 1:
+            return {qoi_name: value[0]}
+        return {qoi_name: value}
+
+    return {qoi_name: value}
+
+def _qoi_process_run(run_key):
+    """Process one SampleID/ReplicateID run."""
+    # fetch run data
+    sample_id, replicate_id = run_key
+    df_run = load_output(_QOI_WORKER["db_file"], sample_ids=[sample_id], replicate_ids=[replicate_id], load_data=True)
+    list_mcds = df_run.iloc[0]["Data"]
+    # free memory
+    del df_run
+
+    run_records = []
+    # timestep QoIs
+    for mcds in list_mcds:
+        # generate record
+        record = {
+            "SampleID": sample_id,
+            "time": mcds.get_time(),
+            "ReplicateID": replicate_id,
+        }
+        # process timestep qois
+        data_cache = {}
+        for qoi_name, qoi_func, input_name in _QOI_WORKER["timestep_plan"]:
+            value = safe_call_qoi_function(
+                qoi_func,
+                mcds=mcds,
+                list_mcds=list_mcds,
+                data_cache=data_cache,
+                input_name=input_name,
+            )
+            # update the record
+            record.update(_flatten_qoi_value(qoi_name, value))
+
+        # update run record collection
+        run_records.append(record)
+        # free memory
+        data_cache.clear()
+        del data_cache
+
+    # full-timeseries QoIs
+    if run_records and _QOI_WORKER["timeseries_plan"]:
+        # process full-timeseries qois
+        mcds_last = list_mcds[-1]
+        for qoi_name, qoi_func, input_name in _QOI_WORKER["timeseries_plan"]:
+            value = safe_call_qoi_function(
+                qoi_func,
+                mcds=mcds_last,
+                list_mcds=list_mcds,
+                data_cache=None,
+                input_name=input_name,
+            )
+            # update the record
+            run_records[-1].update(_flatten_qoi_value(qoi_name, value))
+    # free memory
+    del list_mcds
+
+    # output
+    return run_records
+
+def mcds_list_to_qoi_df_long(
+        recreated_qoi_funcs,
+        all_sample_ids,
+        chunk_size,
+        db_file,
+        n_jobs=1,
+        verbose=False,
+    ) -> pd.DataFrame:
+    """Convert a list of MCDS objects to a DataFrame  of quantities of interest in long format.
+    For every MCDS timestep, one data_cache dictionary is created and passed to all timestep QoIs.
+    The data_cache dictionary is discarded before the next timestep.
 
     Args:
-        recreated_qoi_funcs (dict): Dictionary of QoI functions where keys are QoI names
-                                   and values are callable functions.
+        recreated_qoi_funcs (dict): Dictionary of QoI functions where keys are QoI names and
+            values are callable functions.
         all_sample_ids (list): List of all sample IDs to process.
-        chunk_size (int): Number of samples to process in each chunk to manage memory usage.
+        chunk_size (int): Deprecated. retained for backward compatibility.
+            The long-format streaming implementation processes one SampleID/ReplicateID at a time
+            is processed so this parameter has no effect.
+        n_jobs: number of cup to process runs.
         db_file (str): Path to the database file containing simulation output.
+
     Returns:
-        pd.DataFrame: DataFrame with calculated QoI values indexed by SampleID and ReplicateID, with columns for each QoI - columns combined with time points.
+        pd.DataFrame: DataFrame with calculated QoI values indexed by SampleID and ReplicateID,
+        with columns for each QoI - columns combined with time points.
     """
-    # Process samples in chunks to avoid memory issues
-    ls_column = ['SampleID', 'time', 'ReplicateID']
-    llo_data = []
-    # Track keys per QoI to dynamically add new columns as encountered
-    qoi_keys = {}
-    
-    for i in range(0, len(all_sample_ids), chunk_size):
-        chunk_sample_ids = all_sample_ids[i:i + chunk_size]
-        # Load only this chunk of data
-        df_output = load_output(db_file, sample_ids=chunk_sample_ids, load_data=True)
-        # Fetch mcds from sample replicate
-        for s_sample in sorted(df_output['SampleID'].unique()):
-            df_sample = df_output[df_output['SampleID'] == s_sample]
-            for s_replicate in sorted(df_sample['ReplicateID'].unique()):
-                l_mcds = df_sample[df_sample['ReplicateID'] == s_replicate]['Data'].values[0]
-                for mcds in l_mcds:
-                    lo_data = [s_sample, mcds.get_time(), s_replicate]
-                    try:
-                        for s_qoi_name, o_qoi_func in sorted(recreated_qoi_funcs.items()):
-                            if verbose:
-                                print(f"processing sample replicate qoi: {s_sample} {s_replicate} {s_qoi_name} ...")
-                            # Execute qoi function on mcds
-                            o_result = safe_call_qoi_function(o_qoi_func, mcds=mcds, list_mcds=l_mcds)
-                            # Save results from multi qoi function (dict or Series)
-                            if type(o_result) in {dict, pd.Series}:
-                                items = sorted(o_result.items())
-                                # Add new keys to tracking and columns if not seen before
-                                if s_qoi_name not in qoi_keys:
-                                    qoi_keys[s_qoi_name] = []
-                                for s_key, o_value in items:
-                                    if s_key not in qoi_keys[s_qoi_name]:
-                                        qoi_keys[s_qoi_name].append(s_key)
-                                        ls_column.append(f'{s_qoi_name}_{s_key}')
-                                    lo_data.append(o_value)
-                                # Pad with NaN if result is empty but keys were previously seen
-                                if len(items) == 0 and s_qoi_name in qoi_keys:
-                                    for _ in qoi_keys[s_qoi_name]:
-                                        lo_data.append(np.nan)
-                            # Save result from single qoi function
-                            else:
-                                if s_qoi_name not in ls_column:
-                                    ls_column.append(s_qoi_name)
-                                lo_data.append(o_result)
-                    # Error handling
-                    except Exception as e:
-                        raise RuntimeError(f"Error calculating QoIs for SampleID: {s_sample}, ReplicateID: {s_replicate} - QoI: {s_qoi_name}: {e}")
-                    # Save row
-                    llo_data.append(lo_data)
-        # Explicitely free memory
-        del l_mcds
-        del df_sample
-        del df_output
-    
-    # Pad all rows to match final column count
-    final_col_count = len(ls_column)
-    llo_data = [row + [np.nan] * (final_col_count - len(row)) for row in llo_data]
-    
-    # Generate data frame
-    df_qois = pd.DataFrame(llo_data, columns=ls_column)
-    df_qois = df_qois.sort_values(['SampleID','time','ReplicateID'], ignore_index=True)
-    return df_qois
+    # handle empty sample list
+    if len(all_sample_ids) == 0:
+        return pd.DataFrame(columns=["SampleID", "time", "ReplicateID"])
+
+    # discover replicate keys without loading the large pickled MCDS time series
+    df_keys = load_output(db_file, sample_ids=all_sample_ids, load_data=False)
+    run_keys = list(
+         df_keys[["SampleID", "ReplicateID"]].drop_duplicates().sort_values(["SampleID", "ReplicateID"]).itertuples(index=False, name=None)
+    )
+    # free memory
+    del df_keys
+
+    # standard output
+    if verbose:
+        print('calculate qoi dataframe ...')
+
+    # processing
+    records = []
+
+    # serial
+    if n_jobs == 1:
+        # inspect qoi functions
+        qoi_plan = [
+            (qoi_name, qoi_func, _qoi_first_parameter_name(qoi_func))
+            for qoi_name, qoi_func in recreated_qoi_funcs.items()
+        ]
+        # update worker
+        _QOI_WORKER.clear()
+        _QOI_WORKER.update({
+            "db_file": db_file,
+            "timestep_plan": [entry for entry in qoi_plan if entry[2] != "mcds_ts"],
+            "timeseries_plan": [entry for entry in qoi_plan if entry[2] == "mcds_ts"],
+        })
+        # process run
+        for i, run_key in enumerate(run_keys, start=1):
+            # standard output
+            if verbose:
+                print(f"process run {i}/{len(run_keys)}: SampleID={run_key[0]}, ReplicateID={run_key[1]}.")
+
+            # update records
+            records.extend(_qoi_process_run(run_key))
+
+    # parallel
+    else:
+        # cloudpickle qoi function
+        recreated_qoi_funcs_bytes = cloudpickle.dumps(recreated_qoi_funcs)
+
+        # process runs
+        with ProcessPoolExecutor(
+                max_workers=n_jobs,
+                initializer=_qoi_worker_init,
+                initargs=(db_file, recreated_qoi_funcs_bytes),
+            ) as pool:
+            for i, run_records in enumerate(pool.map(_qoi_process_run, run_keys, chunksize=1), start=1):
+                # standard output
+                if verbose:
+                    run_key = run_keys[i - 1]
+                    print(f"processed run {i}/{len(run_keys)}: SampleID={run_key[0]}, ReplicateID={run_key[1]}.")
+
+                # update records
+                records.extend(run_records)
+
+    # free memory
+    gc.collect()  # call garbage collector
+
+    # output
+    df_long = pd.DataFrame.from_records(records)
+    if df_long.empty:
+        df_long = pd.DataFrame(columns=["SampleID", "time", "ReplicateID"])
+    else:
+        df_long = df_long.sort_values(["SampleID", "time", "ReplicateID"], kind="stable").reset_index(drop=True)
+    return df_long
+
 
 def mcds_list_to_qoi_df_for_calib(recreated_qoi_funcs, all_sample_ids, chunk_size, db_file, verbose=False) -> pd.DataFrame:
     """Convert a list of MCDS objects to a DataFrame of quantities of interest for calibration.
@@ -260,7 +392,7 @@ def get_qoi_from_db_file(db_file:str, qoi_names:list) -> pd.DataFrame:
     keep_cols = ['SampleID', 'time', 'ReplicateID'] + [q for q in qoi_names if q in expanded_data.columns]
     return expanded_data[keep_cols].sort_values(['SampleID', 'time', 'ReplicateID'], ignore_index=True)
 
-def calculate_qoi_from_db_file(db_file:str, qoi_functions:dict, qoi_def:dict={}, chunk_size:int=10, mode='long', verbose=False) -> pd.DataFrame:
+def calculate_qoi_from_db_file(db_file:str, qoi_functions:dict, qoi_def:dict={}, chunk_size:int=10, mode='long', n_jobs=1, verbose=False) -> pd.DataFrame:
     """Calculate quantities of interest from sensitivity analysis database results.
 
     This function loads simulation results from a database in chunks and applies QoI
@@ -283,6 +415,7 @@ def calculate_qoi_from_db_file(db_file:str, qoi_functions:dict, qoi_def:dict={},
                                    Adjust based on available memory and data size.
         mode:  Specify the form of the result dataframe. Possible modes are
             sa, calib, and long. The default is long.
+        n_jobs (int, optional): Number of worker processes used for mode='long'. Default is 1.
 
     Returns:
         pd.DataFrame: DataFrame with calculated QoI values indexed by SampleID and ReplicateID, with columns for each QoI.
@@ -323,6 +456,7 @@ def calculate_qoi_from_db_file(db_file:str, qoi_functions:dict, qoi_def:dict={},
             all_sample_ids=all_sample_ids,
             chunk_size=chunk_size,
             db_file=db_file,
+            n_jobs=n_jobs,
             verbose=verbose,
         )
     else:
@@ -1046,6 +1180,3 @@ def recursive_feature_elimination(df_qois_mean, df_qois_mcse, df_params, autoenc
         # Validation
         'synthetic_recovery_test': recovery_test,
     }
-
-    
-    
