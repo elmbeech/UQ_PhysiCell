@@ -177,11 +177,19 @@ class TestCheckFunctionsNeedMicroenv:
 # ─── safe_call_qoi_function ──────────────────────────────────────────────────
 
 class TestSafeCallQoiFunction:
-    def test_missing_param_name_raises(self):
-        def bare(df):
+    def test_unrecognized_param_name_without_metadata_raises(self):
+        def bare(foo):
             return 1
-        with pytest.raises(ValueError, match="__param_name__"):
+        with pytest.raises(ValueError, match="Could not dispatch QoI function"):
             safe_call_qoi_function(bare, mcds=_fake_mcds())
+
+    def test_bare_function_dispatches_by_its_own_param_name(self):
+        # No wrapper/__param_name__ needed when the parameter is already named
+        # after a recognized input (df_cell, df, df_subs, df_conc, adata, mcds, mcds_ts).
+        def bare(df_cell):
+            return len(df_cell)
+        mcds = _fake_mcds(cell_df=_fake_cell_df(2, 1))
+        assert safe_call_qoi_function(bare, mcds=mcds) == 3
 
     def test_df_cell_dispatches_cell_dataframe(self):
         captured = {}
@@ -216,10 +224,10 @@ class TestSafeCallQoiFunction:
         assert safe_call_qoi_function(func, mcds=mcds_list[-1], list_mcds=mcds_list) == 2
 
     def test_unresolvable_dispatch_raises(self):
-        # df_cell param but no mcds provided at all
+        # df_cell param but mcds is explicitly None
         func = _create_wrapper_for_qoi_function(lambda df_cell: 1, "df_cell", "q")
-        with pytest.raises(ValueError, match="Could not call QoI function"):
-            safe_call_qoi_function(func)
+        with pytest.raises(ValueError, match="mcds is None"):
+            safe_call_qoi_function(func, mcds=None)
 
 
 # ─── _create_wrapper_for_qoi_function ────────────────────────────────────────
