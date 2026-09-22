@@ -474,100 +474,117 @@ def qoi_func_relational_ph( df: pd.DataFrame, landmark_type: str, witness_type: 
     """
     from scipy.spatial.distance import cdist
     from scipy.spatial import Delaunay
+    from itertools import combinations
     import gudhi, muspan
     import matplotlib.pyplot as plt
 
     # Extract A = Landmarks, B = Witnesses
-    A_points = df[df["cell_type"] == landmark_type][["position_x","position_y"]].to_numpy()
-    B_points = df[df["cell_type"] == witness_type][["position_x","position_y"]].to_numpy()
-    if len(A_points) == 0 or len(B_points) == 0:
+    A_data = df[df["cell_type"] == landmark_type]
+    B_data = df[df["cell_type"] == witness_type]
+ 
+    A_points_full = A_data[["position_x", "position_y", "position_z"]].to_numpy()
+    B_points_full = B_data[["position_x", "position_y", "position_z"]].to_numpy()
+ 
+    radius_A = A_data["radius"].to_numpy()
+    radius_B = B_data["radius"].to_numpy()
+ 
+    if len(A_points_full) == 0 or len(B_points_full) == 0:
         print("Warning: Both landmark_type and witness_type must be present.")
-        # Return empty Series without pre-defined index - will be filled with NaN by the caller
         return pd.Series(dtype=float), None
-    # Pairwise distances B×A
+ 
+    # ===== AUTO-DETECT DIMENSIONALITY =====
+    # Check if z-coordinates are effectively zero (2D case)
+    z_threshold = 1e-10  # Tolerance for "zero"
+    A_z_nonzero = np.any(np.abs(A_points_full[:, 2]) > z_threshold)
+    B_z_nonzero = np.any(np.abs(B_points_full[:, 2]) > z_threshold)
+    if A_z_nonzero or B_z_nonzero:
+        # Data is 3D
+        print("✓ Detected 3D data (z-coordinates vary)")
+        dim = 3
+        A_points = A_points_full  # Use all 3 coordinates
+        B_points = B_points_full
+    else:
+        # Data is 2D (all z-coordinates are zero)
+        print("✓ Detected 2D data (z-coordinates all zero, using x,y only)")
+        dim = 2
+        A_points = A_points_full[:, :2]  # Use only x,y
+        B_points = B_points_full[:, :2]
+ 
+    # Compute pairwise distances
     D = cdist(B_points, A_points)
-
-    # Build candidate simplex list from landmarks
-    if len(A_points) < 3:
-        print("Warning: At least 3 landmark points are required for relational PH.")
-        # Return empty Series - will be filled with NaN by the caller
+    # Subtract radii from distances (boundary-to-boundary distance)
+    D -= (radius_A[np.newaxis, :] + radius_B[:, np.newaxis])
+    D[D < 0] = 0  # Clamp negative distances (overlapping cells)
+ 
+    # Check minimum points required for Delaunay
+    min_points_required = dim + 1  # 3 for 2D, 4 for 3D
+    if len(A_points) < min_points_required:
+        print(f"Warning: Delaunay in {dim}D requires at least {min_points_required} landmark points.")
+        print(f"         Got {len(A_points)} landmarks.")
         return pd.Series(dtype=float), None
-    # Use Delaunay to match Python repo behavior
+ 
+    # ===== BUILD DELAUNAY TRIANGULATION =====
     tri = Delaunay(A_points)
-    # vertices = all points
-    vertices = list(range(len(A_points)))
-    # edges from Delaunay
-    edges = set()
-    faces = set()
-    for simplex in tri.simplices:
-        simplex = list(simplex)
-        # all edges
-        for i in range(3):
-            for j in range(i+1, 3):
-                edges.add(tuple(sorted([simplex[i], simplex[j]])))
-        # triangle
-        faces.add(tuple(sorted(simplex)))
-    edges = list(edges)
-    faces = list(faces)
-
-    # Compute filtration values
+ 
+    # ===== EXTRACT ALL SIMPLICES BY DIMENSION =====
+    simplices_by_dim = {k: set() for k in range(min(max_dim + 1, dim))}
+    for top_simplex in tri.simplices:
+        top_simplex = list(top_simplex)
+        # Generate all k-faces from this top simplex
+        for k in range(min(max_dim + 1, dim)):
+            for face in combinations(top_simplex, k + 1):  # k+1 vertices for k-simplex
+                simplices_by_dim[k].add(tuple(sorted(face)))
+ 
+    # Convert to lists
+    simplices_lists = {k: list(s) for k, s in simplices_by_dim.items()}
+ 
+    # ===== COMPUTE FILTRATION VALUES =====
     def dowker_distance(simplex):
         """Distance-based Dowker: min_w max_a d(a,w)."""
         return np.min(np.max(D[:, simplex], axis=1))
-    
+ 
     def dowker_count(simplex):
         """Count-based Dowker: number of witnesses covering all simplex vertices."""
         return -np.sum(np.all(D[:, simplex] <= np.max(D[:, simplex], axis=0), axis=1))
-    
-    # Compute filtration values based on the distance
+ 
     fil_func = dowker_distance if mode == "distance" else dowker_count
-    f_vertex = np.array([fil_func([i]) for i in vertices])
-    f_edge   = np.array([fil_func(list(e)) for e in edges])
-    if max_dim >= 2:
-        f_face   = np.array([fil_func(list(f)) for f in faces])
-
-    # Build GUDHI SimplexTree
+ 
+    # ===== BUILD GUDHI SIMPLEX TREE =====
     st = gudhi.SimplexTree()
-    # vertices
-    for i, fv in enumerate(f_vertex):
-        st.insert([i], filtration=float(fv))
-    # edges
-    for (e, fv) in zip(edges, f_edge):
-        st.insert(list(e), filtration=float(fv))
-    # faces
-    if max_dim >= 2:
-        for (f, fv) in zip(faces, f_face):
-            st.insert(list(f), filtration=float(fv))
+    for k in range(min(max_dim + 1, dim)):
+        if len(simplices_lists[k]) == 0:
+            continue
+        simplex_list = simplices_lists[k]
+        f_vals = np.array([fil_func(list(s)) for s in simplex_list])
+        for simplex, fv in zip(simplex_list, f_vals):
+            st.insert(list(simplex), filtration=float(fv))
+ 
     st.initialize_filtration()
-
-    # Compute persistence
+ 
+    # ===== COMPUTE PERSISTENCE =====
     diag = st.persistence()
-
-    # Convert GUDHI persistence output to muspan-style dict {'dgms': [array_dim0, array_dim1, ...]}
+ 
+    # Convert to muspan format
     dgms = []
-    for d in range(max_dim + 1):
-        intervals = [pair for dim, pair in diag if dim == d]
+    for d in range(min(max_dim + 1, dim)):
+        intervals = [pair for dim_d, pair in diag if dim_d == d]
         if len(intervals) == 0:
             dgms.append(np.zeros((0, 2)))
         else:
             dgms.append(np.array(intervals))
     feature_persistence = {'dgms': dgms}
-
-    # Vectorize diagram using muspan's statistics. Some degenerate diagrams can
-    # produce empty finite arrays in muspan/numpy percentile calls.
+ 
+    # ===== VECTORIZE PERSISTENCE DIAGRAM =====
     try:
         vec, names = muspan.topology.vectorise_persistence(feature_persistence, method="statistics")
         vec = pd.Series(vec, index=names)
     except (IndexError, ValueError) as e:
-        print(
-            f"Warning: Could not vectorize relational PH for "
-            f"{landmark_type}->{witness_type}: {e}"
-        )
-        # Return empty Series - will be filled with NaN by the caller
+        print(f"Warning: Could not vectorize relational PH for {landmark_type}->{witness_type}: {e}")
         vec = pd.Series(dtype=float)
-
-    # Plot
+ 
+    # ===== PLOT =====
     if ax is not None:
         axes = gudhi.plot_persistence_diagram(diag, axes=ax)
-
+ 
+    print(f"✓ Computed {dim}D relational PH: {len(vec)} features extracted")
     return vec, diag
