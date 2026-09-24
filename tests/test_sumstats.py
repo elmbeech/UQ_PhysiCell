@@ -184,8 +184,8 @@ class TestSafeCallQoiFunction:
             safe_call_qoi_function(bare, mcds=_fake_mcds())
 
     def test_bare_function_dispatches_by_its_own_param_name(self):
-        # No wrapper/__param_name__ needed when the parameter is already named
-        # after a recognized input (df_cell, df, df_subs, df_conc, adata, mcds, mcds_ts).
+        # No wrapper/__param_name__ needed when the parameter is already named after a
+        # recognized input (df, df_cell, df_subs, df_conc, adata, sdata, domain, mcds, mcds_ts).
         def bare(df_cell):
             return len(df_cell)
         mcds = _fake_mcds(cell_df=_fake_cell_df(2, 1))
